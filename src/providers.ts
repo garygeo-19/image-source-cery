@@ -157,8 +157,112 @@ export const generate: Provider = {
   },
 };
 
+// ── Openverse (no key) — 800M+ CC-licensed images across many sources ─────────
+export const openverse: Provider = {
+  name: "openverse",
+  kind: "search",
+  configured: () => true,
+  async provide(req) {
+    const data = await getJSON(
+      "https://api.openverse.org/v1/images/?" +
+        new URLSearchParams({ q: req.query, page_size: String(req.count ?? 5) }),
+    );
+    return (data.results ?? []).map((r: any) => ({
+      url: r.url, provider: "openverse", title: r.title,
+      attribution: r.creator ? `${r.creator} (Openverse)` : "Openverse",
+      license: `${r.license ?? ""} ${r.license_version ?? ""}`.trim(),
+      sourceUrl: r.foreign_landing_url,
+    }));
+  },
+};
+
+// ── NASA Images (no key) — space & earth science, public domain ───────────────
+export const nasa: Provider = {
+  name: "nasa",
+  kind: "search",
+  configured: () => true,
+  async provide(req) {
+    const data = await getJSON(
+      "https://images-api.nasa.gov/search?" +
+        new URLSearchParams({ q: req.query, media_type: "image" }),
+    );
+    const items = data.collection?.items ?? [];
+    return items.slice(0, req.count ?? 5).map((x: any) => {
+      const meta = x.data?.[0] ?? {};
+      const href = (x.links?.[0]?.href ?? "").replace(/~thumb\.jpg$/i, "~medium.jpg");
+      return {
+        url: href, provider: "nasa", title: meta.title,
+        attribution: meta.center ? `NASA / ${meta.center}` : "NASA",
+        license: "Public Domain (NASA — verify usage)",
+        sourceUrl: meta.nasa_id ? `https://images.nasa.gov/details/${meta.nasa_id}` : undefined,
+      };
+    }).filter((c: Candidate) => !!c.url);
+  },
+};
+
+// ── The Met (no key) — public-domain art & artifacts (two-step search) ────────
+export const met: Provider = {
+  name: "met",
+  kind: "search",
+  configured: () => true,
+  async provide(req) {
+    const s = await getJSON(
+      "https://collectionapi.metmuseum.org/public/collection/v1/search?" +
+        new URLSearchParams({ q: req.query, hasImages: "true" }),
+    );
+    const ids: number[] = (s.objectIDs ?? []).slice(0, req.count ?? 5);
+    const out: Candidate[] = [];
+    for (const id of ids) {
+      try {
+        const o = await getJSON(
+          `https://collectionapi.metmuseum.org/public/collection/v1/objects/${id}`,
+        );
+        const img = o.primaryImage || o.primaryImageSmall;
+        if (!img) continue;
+        out.push({
+          url: img, provider: "met", title: o.title,
+          attribution: o.artistDisplayName || "The Metropolitan Museum of Art",
+          license: o.isPublicDomain ? "Public Domain (CC0)" : "The Met (verify)",
+          sourceUrl: o.objectURL,
+        });
+      } catch { /* skip unfetchable object */ }
+    }
+    return out;
+  },
+};
+
+// ── Smithsonian Open Access (key: SMITHSONIAN_API_KEY, free at api.data.gov) ───
+export const smithsonian: Provider = {
+  name: "smithsonian",
+  kind: "search",
+  configured: (ctx) => {
+    const k = ctx.options.apiKeyEnv ?? "SMITHSONIAN_API_KEY";
+    return ctx.env[k] ? true : `set ${k} (free key at api.data.gov)`;
+  },
+  async provide(req, ctx) {
+    const key = ctx.env[ctx.options.apiKeyEnv ?? "SMITHSONIAN_API_KEY"]!;
+    const data = await getJSON(
+      "https://api.si.edu/openaccess/api/v1.0/search?" +
+        new URLSearchParams({ q: req.query, rows: String(req.count ?? 5), api_key: key }),
+    );
+    const out: Candidate[] = [];
+    for (const r of data.response?.rows ?? []) {
+      const media = r.content?.descriptiveNonRepeating?.online_media?.media ?? [];
+      const m = media.find((x: any) => x.type === "Images") || media[0];
+      const img = m?.content || m?.thumbnail;
+      if (!img) continue;
+      out.push({
+        url: img, provider: "smithsonian", title: r.title,
+        attribution: "Smithsonian Open Access", license: "CC0 (verify)",
+        sourceUrl: r.content?.descriptiveNonRepeating?.record_link,
+      });
+    }
+    return out;
+  },
+};
+
 export const REGISTRY: Record<string, Provider> = {
-  wikimedia, inaturalist, loc, unsplash, generate,
+  wikimedia, inaturalist, loc, unsplash, openverse, nasa, met, smithsonian, generate,
 };
 
 export function getProvider(name: string): Provider {

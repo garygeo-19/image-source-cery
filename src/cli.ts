@@ -33,6 +33,7 @@ Options for find:
   --out <path>            save the chosen image here
   --providers a,b,c       override the ranked pipeline (e.g. wikimedia,inaturalist,generate)
   --judge none|openai|human   override the judge
+  --best                  judge ALL candidates and keep the highest scorer
   --min <0..1>            minimum judge score to accept
   --must-show "<text>"    positive constraint the judge must confirm
   --must-not "<text>"     negative constraint (must not be confused with)
@@ -82,6 +83,7 @@ async function main() {
     if (!query) { console.error('find needs a subject, e.g. imgsrcy find "saguaro cactus"'); process.exit(1); }
     if (flags.providers) config.pipeline = flags.providers.split(",").map((p) => ({ provider: p.trim() }));
     if (flags.judge) config.judge = { ...config.judge, provider: flags.judge };
+    if (flags.best) config.mode = "best";
 
     const req = {
       query,
@@ -93,21 +95,26 @@ async function main() {
 
     const result = await run(req, config, env, (m) => console.error(m));
 
-    if (result.bytes && flags.out) {
-      mkdirSync(path.dirname(path.resolve(flags.out)), { recursive: true });
-      writeFileSync(flags.out, result.bytes);
-    }
-    console.log(JSON.stringify({
-      ok: result.ok,
+    const provenance = {
+      query, ok: result.ok,
       provider: result.candidate?.provider,
       title: result.candidate?.title,
       license: result.candidate?.license,
       attribution: result.candidate?.attribution,
       sourceUrl: result.candidate?.sourceUrl,
       score: result.verdict?.score,
+      reason: result.verdict?.reason,
       out: flags.out ?? null,
+      generatedAt: new Date().toISOString(),
       attempts: result.attempts,
-    }, null, 2));
+    };
+    if (result.bytes && flags.out) {
+      mkdirSync(path.dirname(path.resolve(flags.out)), { recursive: true });
+      writeFileSync(flags.out, result.bytes);
+      // sidecar provenance manifest — source, license, attribution, decision trace
+      writeFileSync(flags.out + ".json", JSON.stringify(provenance, null, 2));
+    }
+    console.log(JSON.stringify(provenance, null, 2));
     process.exit(result.ok ? 0 : 2);
   }
 

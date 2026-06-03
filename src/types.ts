@@ -75,6 +75,12 @@ export interface Config {
   judge: JudgeConfig;
   /** Ranked list — tried in order. */
   pipeline: PipelineEntry[];
+  /**
+   * "first-pass" (default): stop at the first candidate that passes — cheapest.
+   * "best": judge every candidate from every provider and return the highest
+   * scorer — more thorough (and more API calls), fixes "the 1st result was bad".
+   */
+  mode?: "first-pass" | "best";
 }
 
 export interface Attempt {

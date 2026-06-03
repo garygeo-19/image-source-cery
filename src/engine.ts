@@ -19,6 +19,7 @@ export async function run(
   const jok = judge.configured(judgeCtx);
   if (jok !== true) throw new Error(`judge "${judge.name}" not configured: ${jok}`);
 
+  const mode = config.mode ?? "first-pass";
   const attempts: Attempt[] = [];
   let best: { c: Candidate; v: Verdict } | null = null;
 
@@ -43,17 +44,19 @@ export async function run(
       catch (e) { log(`  judge error: ${(e as Error).message}`); continue; }
       attempts.push({ provider: provider.name, score: v.score, passes: v.passes, reason: v.reason });
       log(`  ${v.passes ? "✓ PASS" : "· fail"} (${v.score.toFixed(2)}) ${v.reason}${v.confusedWith ? ` [looks like: ${v.confusedWith}]` : ""}`);
-      if (v.passes) {
+      if (!best || v.score > best.v.score) best = { c, v };
+      // first-pass: stop the moment something is good enough (cheapest).
+      // best: keep judging everything and pick the global max at the end.
+      if (v.passes && mode === "first-pass") {
         const bytes = c.bytes ?? (await download(c.url!)).bytes;
         return { ok: true, candidate: c, verdict: v, bytes, attempts };
       }
-      if (!best || v.score > best.v.score) best = { c, v };
     }
   }
 
   if (best) {
     const bytes = best.c.bytes ?? (await download(best.c.url!).then((d) => d.bytes).catch(() => undefined));
-    return { ok: false, candidate: best.c, verdict: best.v, bytes, attempts };
+    return { ok: best.v.passes, candidate: best.c, verdict: best.v, bytes, attempts };
   }
   return { ok: false, attempts };
 }

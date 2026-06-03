@@ -81,10 +81,24 @@ Put keys in your shell env or a local `.env` (gitignored). Nothing is bundled.
 | `wikimedia` | none | niche subjects, species, science, historical |
 | `inaturalist` | none | **community-verified species photos** (license-filterable) |
 | `loc` | none | US historical people, places, events (public domain) |
+| `openverse` | none | 800M+ CC-licensed images across many sources |
+| `nasa` | none | space & earth science (public domain) |
+| `met` | none | public-domain art & artifacts (The Met) |
+| `smithsonian` | `SMITHSONIAN_API_KEY` | art, history, natural science (free key) |
 | `unsplash` | `UNSPLASH_ACCESS_KEY` | modern stock photography, mood |
 | `generate` | `OPENAI_API_KEY` | anything nothing else has (gpt-image-1) |
 
 Judges: `openai` (vision), `human` (interactive), `none` (accept first).
+
+### Modes
+
+- **first-pass** (default) — stop at the first candidate that passes. Cheapest.
+- **best** (`--best` or `"mode": "best"`) — judge *every* candidate from every
+  provider and keep the highest scorer. More thorough (and more API calls); fixes
+  "the first result was bad."
+
+Every `--out` also writes a **provenance sidecar** (`<out>.json`): the source, license,
+attribution, query, judge score + reason, and the full decision trace.
 
 ## Add a provider (the whole extension surface)
 
@@ -105,10 +119,12 @@ Register it, drop it into your ranked `pipeline`, done.
 
 ## Roadmap
 
-- More providers: Openverse, Smithsonian, NASA, The Met, Europeana, Flickr, GBIF
+- ✅ Providers: Wikimedia, iNaturalist, LoC, Openverse, NASA, The Met, Smithsonian, Unsplash, generate
+- ✅ Multi-candidate `--best` mode; provenance sidecar manifests
+- More providers: Europeana, Flickr Commons, GBIF, Pexels, Pixabay
 - More judges/generators: Anthropic & Gemini vision; Imagen, Flux, local Stable Diffusion
-- Multi-candidate scoring (judge top-K, keep the best), cost ledger + budgets, caching
 - **MCP server** so any agent (Claude Code, Cursor) can call it as tools
+- Cost ledger + budgets, response/image caching
 - Diagram lane: author SVGs as code (with no-answer-giveaway rules)
 
 ## License
