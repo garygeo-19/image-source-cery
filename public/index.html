@@ -1,0 +1,160 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Image Source-cery 🪄</title>
+<style>
+  :root { --bg:#0f1020; --panel:#1a1b35; --panel2:#23244a; --ink:#e9e9ff; --mut:#9a9ac8; --acc:#a98bff; --good:#5ad19a; --bad:#ff7a90; --line:#2e2f5c; }
+  * { box-sizing: border-box; }
+  body { margin:0; font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; background:var(--bg); color:var(--ink); }
+  header { padding:18px 24px; border-bottom:1px solid var(--line); display:flex; align-items:baseline; gap:12px; }
+  header h1 { font-size:20px; margin:0; }
+  header .tag { color:var(--mut); font-size:13px; }
+  .wrap { display:grid; grid-template-columns:320px 1fr; gap:0; min-height:calc(100vh - 61px); }
+  .side { padding:18px; border-right:1px solid var(--line); background:var(--panel); }
+  .main { padding:18px 24px; overflow:auto; }
+  label { display:block; font-size:12px; text-transform:uppercase; letter-spacing:.06em; color:var(--mut); margin:14px 0 6px; }
+  input[type=text], select, input[type=number] { width:100%; background:var(--panel2); border:1px solid var(--line); color:var(--ink); border-radius:8px; padding:9px 10px; font-size:14px; }
+  .row { display:flex; gap:8px; }
+  .row > * { flex:1; }
+  .btns { display:flex; gap:8px; margin-top:16px; }
+  button { background:var(--acc); color:#16102e; border:0; border-radius:8px; padding:10px 12px; font-weight:600; cursor:pointer; font-size:14px; }
+  button.ghost { background:var(--panel2); color:var(--ink); border:1px solid var(--line); }
+  button:disabled { opacity:.5; cursor:default; }
+  .plist { margin-top:8px; border:1px solid var(--line); border-radius:8px; overflow:hidden; }
+  .pitem { display:flex; align-items:center; gap:8px; padding:8px 10px; border-bottom:1px solid var(--line); background:var(--panel2); }
+  .pitem:last-child { border-bottom:0; }
+  .pitem .nm { flex:1; font-size:14px; }
+  .pitem .kind { font-size:11px; color:var(--mut); }
+  .pitem .badge { font-size:10px; padding:1px 6px; border-radius:20px; }
+  .badge.ok { background:rgba(90,209,154,.15); color:var(--good); }
+  .badge.no { background:rgba(255,122,144,.15); color:var(--bad); }
+  .ord { display:flex; flex-direction:column; }
+  .ord button { background:none; color:var(--mut); padding:0 4px; font-size:11px; line-height:1.1; }
+  .prov-sec { margin-bottom:26px; }
+  .prov-sec h3 { margin:0 0 4px; font-size:15px; display:flex; align-items:center; gap:8px; }
+  .prov-sec .meta { color:var(--mut); font-size:12px; font-weight:400; }
+  .gal { display:grid; grid-template-columns:repeat(auto-fill,minmax(180px,1fr)); gap:12px; }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:10px; overflow:hidden; }
+  .card img { width:100%; height:140px; object-fit:cover; background:var(--panel2); display:block; }
+  .card .cap { padding:7px 9px; font-size:11px; color:var(--mut); }
+  .card .cap b { color:var(--ink); font-weight:600; }
+  .empty { color:var(--mut); font-size:13px; padding:6px 0; }
+  .winner { display:flex; gap:18px; background:var(--panel); border:1px solid var(--acc); border-radius:12px; padding:16px; margin-bottom:18px; }
+  .winner img { width:260px; height:200px; object-fit:cover; border-radius:8px; }
+  .trace { font:12px/1.6 ui-monospace,Menlo,monospace; background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:12px; white-space:pre-wrap; color:var(--mut); }
+  .pill { font-size:11px; padding:2px 8px; border-radius:20px; background:var(--panel2); color:var(--mut); }
+  .hint { color:var(--mut); font-size:12px; margin-top:4px; }
+  a { color:var(--acc); text-decoration:none; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Image Source-cery 🪄</h1>
+  <span class="tag">ranked image sourcing, with a judge</span>
+</header>
+<div class="wrap">
+  <aside class="side">
+    <label>Search term</label>
+    <input id="q" type="text" placeholder="e.g. Yarrow's spiny lizard" value="saguaro cactus" />
+    <div class="row">
+      <div><label>Per provider</label><input id="count" type="number" min="1" max="8" value="3" /></div>
+      <div><label>Judge</label><select id="judge"></select></div>
+    </div>
+    <div class="row">
+      <div><label>Mode</label><select id="mode"><option value="first-pass">first-pass</option><option value="best">best</option></select></div>
+      <div><label>Min score</label><input id="min" type="number" min="0" max="1" step="0.05" value="0.7" /></div>
+    </div>
+    <label>Must NOT be (judge hint)</label>
+    <input id="mustnot" type="text" placeholder="optional, e.g. desert spiny lizard" />
+
+    <label>Providers — drag order with ↑ ↓, toggle to include</label>
+    <div id="plist" class="plist"></div>
+    <div class="hint">Greyed = not configured (missing key). Generation is off by default in gallery view.</div>
+
+    <div class="btns">
+      <button id="go">Run gallery</button>
+      <button id="pipe" class="ghost">Run pipeline (judge)</button>
+    </div>
+    <div class="hint" id="status"></div>
+  </aside>
+
+  <main class="main" id="out">
+    <p class="empty">Enter a term and hit <b>Run gallery</b> to see what each provider returns, in order — or <b>Run pipeline</b> to run the ranked judge loop and see the winner + decision trace.</p>
+  </main>
+</div>
+
+<script>
+const $ = s => document.querySelector(s);
+let providers = []; // {name, kind, configured, enabled}
+
+async function init() {
+  const data = await (await fetch('/api/providers')).json();
+  $('#judge').innerHTML = data.judges.map(j => `<option ${j==='none'?'selected':''}>${j}</option>`).join('');
+  providers = data.providers.map(p => ({ ...p, enabled: p.configured === true && p.kind !== 'generate' }));
+  renderProviders();
+}
+
+function renderProviders() {
+  $('#plist').innerHTML = providers.map((p, i) => {
+    const ok = p.configured === true;
+    return `<div class="pitem">
+      <input type="checkbox" data-i="${i}" class="en" ${p.enabled?'checked':''} ${ok?'':'disabled'} />
+      <span class="nm">${p.name} <span class="kind">${p.kind}</span></span>
+      <span class="badge ${ok?'ok':'no'}">${ok?'ready':p.configured}</span>
+      <span class="ord"><button data-up="${i}">▲</button><button data-dn="${i}">▼</button></span>
+    </div>`;
+  }).join('');
+  $('#plist').querySelectorAll('.en').forEach(el => el.onchange = e => { providers[+e.target.dataset.i].enabled = e.target.checked; });
+  $('#plist').querySelectorAll('[data-up]').forEach(el => el.onclick = e => move(+el.dataset.up, -1));
+  $('#plist').querySelectorAll('[data-dn]').forEach(el => el.onclick = e => move(+el.dataset.dn, +1));
+}
+function move(i, d) { const j=i+d; if(j<0||j>=providers.length) return; [providers[i],providers[j]]=[providers[j],providers[i]]; renderProviders(); }
+function enabledOrder() { return providers.filter(p=>p.enabled).map(p=>p.name); }
+function status(t) { $('#status').textContent = t; }
+function esc(s){ return (s||'').replace(/[<>&]/g,c=>({'<':'&lt;','>':'&gt;','&':'&amp;'}[c])); }
+
+async function runGallery() {
+  const query = $('#q').value.trim(); if(!query) return;
+  const order = enabledOrder();
+  status('sourcing from ' + order.length + ' providers…'); $('#go').disabled = true;
+  try {
+    const r = await (await fetch('/api/search', {method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify({ query, providers: order, count: +$('#count').value })})).json();
+    $('#out').innerHTML = r.results.map(sec => {
+      const head = `<h3>${sec.provider} <span class="meta">${sec.kind||''} ${sec.ms!=null?'· '+sec.ms+'ms':''} ${sec.skipped?'· skipped: '+sec.skipped:''} ${sec.error?'· error: '+esc(sec.error):''}</span></h3>`;
+      const cards = (sec.candidates||[]).map(c => `<div class="card">
+        <img loading="lazy" src="${c.src}" alt="${esc(c.title||'')}" onerror="this.style.opacity=.25" />
+        <div class="cap"><b>${esc(c.title||'')}</b><br>${esc(c.attribution||'')}<br><span class="pill">${esc(c.license||'?')}</span> ${c.sourceUrl?`<a href="${c.sourceUrl}" target="_blank">source</a>`:''}</div>
+      </div>`).join('');
+      return `<div class="prov-sec">${head}${cards?`<div class="gal">${cards}</div>`:'<div class="empty">no results</div>'}</div>`;
+    }).join('');
+    status('done — ' + r.results.reduce((n,s)=>n+(s.candidates?.length||0),0) + ' images');
+  } catch(e){ status('error: '+e.message); } finally { $('#go').disabled = false; }
+}
+
+async function runPipeline() {
+  const query = $('#q').value.trim(); if(!query) return;
+  const order = enabledOrder();
+  status('running ranked pipeline with judge="'+$('#judge').value+'"…'); $('#pipe').disabled = true;
+  try {
+    const r = await (await fetch('/api/pipeline', {method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify({ query, providers: order, judge: $('#judge').value, mode: $('#mode').value, minScore: +$('#min').value, mustNot: $('#mustnot').value || undefined, count: +$('#count').value })})).json();
+    const w = r.winner;
+    const winnerHtml = w ? `<div class="winner">
+      <img src="${w.src}" />
+      <div><h3>${r.ok?'✓ winner':'✗ best effort (nothing passed)'} — ${w.provider}</h3>
+        <p>${esc(w.attribution||'')}<br><span class="pill">${esc(w.license||'?')}</span> ${w.sourceUrl?`<a href="${w.sourceUrl}" target="_blank">source</a>`:''}</p>
+        <p class="meta">judge score ${w.score?.toFixed?.(2) ?? w.score} — ${esc(w.reason||'')}</p></div></div>` : '<p class="empty">no candidate found</p>';
+    const trace = (r.attempts||[]).map(a => `${a.passes?'✓':'·'} ${a.provider.padEnd(12)} ${(a.score??0).toFixed(2)}  ${esc(a.reason||'')}`).join('\n');
+    $('#out').innerHTML = winnerHtml + `<h3>Decision trace</h3><div class="trace">${trace||'(no attempts)'}</div>`;
+    status('done');
+  } catch(e){ status('error: '+e.message); } finally { $('#pipe').disabled = false; }
+}
+
+$('#go').onclick = runGallery;
+$('#pipe').onclick = runPipeline;
+$('#q').addEventListener('keydown', e => { if(e.key==='Enter') runGallery(); });
+init();
+</script>
+</body>
+</html>

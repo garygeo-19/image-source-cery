@@ -54,6 +54,26 @@ imgsrcy find "Yarrow's spiny lizard" \
 imgsrcy doctor
 ```
 
+## Demo UI
+
+A zero-dependency web demo lets you watch the providers race for a term — see what
+each one returns side by side, reorder/toggle them, then run the judged pipeline and
+inspect the winner + decision trace.
+
+```bash
+npm run serve          # → http://localhost:5190  (or: npm run build && npm start)
+```
+
+- **Search term** → **Run gallery** sources from every enabled provider *in order* and
+  shows their candidates with license + attribution.
+- Drag the order with ▲ ▼ and toggle providers on/off; unconfigured ones (missing key)
+  are greyed out — your **own** credentials, read from env, decide what's available.
+- Pick a **judge** + **mode**, then **Run pipeline** to run the real ranked loop and see
+  which candidate won and why (the full decision trace).
+
+It calls the same engine the CLI does, over a tiny HTTP API (`GET /api/providers`,
+`POST /api/search`, `POST /api/pipeline`). No keys are bundled; nothing leaves your machine.
+
 ## Configuration
 
 Copy `image-sourcery.config.example.json` → `image-sourcery.config.json` and set your
@@ -121,6 +141,7 @@ Register it, drop it into your ranked `pipeline`, done.
 
 - ✅ Providers: Wikimedia, iNaturalist, LoC, Openverse, NASA, The Met, Smithsonian, Unsplash, generate
 - ✅ Multi-candidate `--best` mode; provenance sidecar manifests
+- ✅ Demo web UI (`npm run serve`) — gallery + judged pipeline over a tiny HTTP API
 - More providers: Europeana, Flickr Commons, GBIF, Pexels, Pixabay
 - More judges/generators: Anthropic & Gemini vision; Imagen, Flux, local Stable Diffusion
 - **MCP server** so any agent (Claude Code, Cursor) can call it as tools
