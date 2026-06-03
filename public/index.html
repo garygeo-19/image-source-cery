@@ -11,20 +11,24 @@
   header { padding:18px 24px; border-bottom:1px solid var(--line); display:flex; align-items:baseline; gap:12px; }
   header h1 { font-size:20px; margin:0; }
   header .tag { color:var(--mut); font-size:13px; }
-  .wrap { display:grid; grid-template-columns:320px 1fr; gap:0; min-height:calc(100vh - 61px); }
+  .wrap { display:grid; grid-template-columns:340px 1fr; gap:0; min-height:calc(100vh - 61px); }
   .side { padding:18px; border-right:1px solid var(--line); background:var(--panel); }
   .main { padding:18px 24px; overflow:auto; }
   label { display:block; font-size:12px; text-transform:uppercase; letter-spacing:.06em; color:var(--mut); margin:14px 0 6px; }
-  input[type=text], select, input[type=number] { width:100%; background:var(--panel2); border:1px solid var(--line); color:var(--ink); border-radius:8px; padding:9px 10px; font-size:14px; }
+  input[type=text], input[type=password], select, input[type=number] { width:100%; background:var(--panel2); border:1px solid var(--line); color:var(--ink); border-radius:8px; padding:9px 10px; font-size:14px; }
   .row { display:flex; gap:8px; }
   .row > * { flex:1; }
   .btns { display:flex; gap:8px; margin-top:16px; }
   button { background:var(--acc); color:#16102e; border:0; border-radius:8px; padding:10px 12px; font-weight:600; cursor:pointer; font-size:14px; }
   button.ghost { background:var(--panel2); color:var(--ink); border:1px solid var(--line); }
+  button.sm { padding:7px 10px; font-size:13px; }
   button:disabled { opacity:.5; cursor:default; }
   .plist { margin-top:8px; border:1px solid var(--line); border-radius:8px; overflow:hidden; }
-  .pitem { display:flex; align-items:center; gap:8px; padding:8px 10px; border-bottom:1px solid var(--line); background:var(--panel2); }
+  .pitem { display:flex; align-items:center; gap:8px; padding:8px 10px; border-bottom:1px solid var(--line); background:var(--panel2); cursor:grab; }
   .pitem:last-child { border-bottom:0; }
+  .pitem.dragging { opacity:.4; }
+  .pitem.over { box-shadow: inset 0 2px 0 var(--acc); }
+  .pitem .grip { color:var(--mut); cursor:grab; font-size:13px; user-select:none; }
   .pitem .nm { flex:1; font-size:14px; }
   .pitem .kind { font-size:11px; color:var(--mut); }
   .pitem .badge { font-size:10px; padding:1px 6px; border-radius:20px; }
@@ -32,6 +36,16 @@
   .badge.no { background:rgba(255,122,144,.15); color:var(--bad); }
   .ord { display:flex; flex-direction:column; }
   .ord button { background:none; color:var(--mut); padding:0 4px; font-size:11px; line-height:1.1; }
+  details.creds { margin-top:8px; border:1px solid var(--line); border-radius:8px; background:var(--panel2); padding:6px 10px; }
+  details.creds summary { cursor:pointer; font-size:13px; color:var(--ink); }
+  .cred { margin:10px 0; }
+  .cred .top { display:flex; align-items:center; gap:8px; }
+  .cred .dot { width:8px; height:8px; border-radius:50%; background:var(--bad); flex:0 0 auto; }
+  .cred .dot.on { background:var(--good); }
+  .cred code { font-size:12px; color:var(--ink); }
+  .cred .who { font-size:11px; color:var(--mut); }
+  .cred .form { display:flex; gap:6px; margin-top:6px; }
+  .cred .form input { flex:1; }
   .prov-sec { margin-bottom:26px; }
   .prov-sec h3 { margin:0 0 4px; font-size:15px; display:flex; align-items:center; gap:8px; }
   .prov-sec .meta { color:var(--mut); font-size:12px; font-weight:400; }
@@ -69,9 +83,16 @@
     <label>Must NOT be (judge hint)</label>
     <input id="mustnot" type="text" placeholder="optional, e.g. desert spiny lizard" />
 
-    <label>Providers — drag order with ↑ ↓, toggle to include</label>
+    <label>Providers — drag to reorder, toggle to include</label>
     <div id="plist" class="plist"></div>
-    <div class="hint">Greyed = not configured (missing key). Generation is off by default in gallery view.</div>
+    <div class="hint">Greyed = not configured (add its key below). Generation is off by default in gallery view.</div>
+
+    <label>Credentials</label>
+    <details class="creds" id="credsBox">
+      <summary>API keys — <span id="credsCount"></span></summary>
+      <div id="creds"></div>
+      <div class="hint">Kept in this server's memory for this session only — never written to disk, never sent anywhere but the provider you're calling.</div>
+    </details>
 
     <div class="btns">
       <button id="go">Run gallery</button>
@@ -87,30 +108,90 @@
 
 <script>
 const $ = s => document.querySelector(s);
-let providers = []; // {name, kind, configured, enabled}
+let providers = [];   // {name, kind, configured, keyEnv, enabled}
+let judges = [];      // {name, configured, keyEnv}
+let credentials = []; // {env, set, usedBy[]}
 
-async function init() {
+async function load() {
   const data = await (await fetch('/api/providers')).json();
-  $('#judge').innerHTML = data.judges.map(j => `<option ${j==='none'?'selected':''}>${j}</option>`).join('');
-  providers = data.providers.map(p => ({ ...p, enabled: p.configured === true && p.kind !== 'generate' }));
+  judges = data.judges;
+  credentials = data.credentials;
+  const prevJudge = $('#judge').value;
+  $('#judge').innerHTML = judges.map(j => `<option value="${j.name}" ${(j.name===(prevJudge||'none'))?'selected':''}>${j.name}${j.configured!==true?' (needs key)':''}</option>`).join('');
+  // preserve prior order/enabled choices across reloads
+  const prev = Object.fromEntries(providers.map(p => [p.name, p]));
+  const byName = Object.fromEntries(data.providers.map(p => [p.name, p]));
+  const order = providers.length ? providers.map(p=>p.name).filter(n=>byName[n]) : data.providers.map(p=>p.name);
+  for (const p of data.providers) if (!order.includes(p.name)) order.push(p.name);
+  providers = order.map(n => {
+    const fresh = byName[n], old = prev[n];
+    const enabled = old ? old.enabled : (fresh.configured === true && fresh.kind !== 'generate');
+    return { ...fresh, enabled: enabled && fresh.configured === true };
+  });
   renderProviders();
+  renderCreds();
 }
 
 function renderProviders() {
   $('#plist').innerHTML = providers.map((p, i) => {
     const ok = p.configured === true;
-    return `<div class="pitem">
+    return `<div class="pitem" draggable="true" data-idx="${i}">
+      <span class="grip">⠿</span>
       <input type="checkbox" data-i="${i}" class="en" ${p.enabled?'checked':''} ${ok?'':'disabled'} />
       <span class="nm">${p.name} <span class="kind">${p.kind}</span></span>
-      <span class="badge ${ok?'ok':'no'}">${ok?'ready':p.configured}</span>
-      <span class="ord"><button data-up="${i}">▲</button><button data-dn="${i}">▼</button></span>
+      <span class="badge ${ok?'ok':'no'}">${ok?'ready':(p.keyEnv?'needs '+p.keyEnv:p.configured)}</span>
+      <span class="ord"><button data-up="${i}" title="up">▲</button><button data-dn="${i}" title="down">▼</button></span>
     </div>`;
   }).join('');
-  $('#plist').querySelectorAll('.en').forEach(el => el.onchange = e => { providers[+e.target.dataset.i].enabled = e.target.checked; });
-  $('#plist').querySelectorAll('[data-up]').forEach(el => el.onclick = e => move(+el.dataset.up, -1));
-  $('#plist').querySelectorAll('[data-dn]').forEach(el => el.onclick = e => move(+el.dataset.dn, +1));
+  const list = $('#plist');
+  list.querySelectorAll('.en').forEach(el => el.onchange = e => { providers[+e.target.dataset.i].enabled = e.target.checked; });
+  list.querySelectorAll('[data-up]').forEach(el => el.onclick = () => move(+el.dataset.up, -1));
+  list.querySelectorAll('[data-dn]').forEach(el => el.onclick = () => move(+el.dataset.dn, +1));
+  // drag and drop
+  let from = null;
+  list.querySelectorAll('.pitem').forEach(row => {
+    row.addEventListener('dragstart', e => { from = +row.dataset.idx; row.classList.add('dragging'); e.dataTransfer.effectAllowed = 'move'; });
+    row.addEventListener('dragend', () => { from = null; list.querySelectorAll('.pitem').forEach(r=>r.classList.remove('dragging','over')); });
+    row.addEventListener('dragover', e => { e.preventDefault(); row.classList.add('over'); });
+    row.addEventListener('dragleave', () => row.classList.remove('over'));
+    row.addEventListener('drop', e => {
+      e.preventDefault();
+      const to = +row.dataset.idx;
+      if (from === null || from === to) return;
+      const [moved] = providers.splice(from, 1);
+      providers.splice(to, 0, moved);
+      renderProviders();
+    });
+  });
 }
+
 function move(i, d) { const j=i+d; if(j<0||j>=providers.length) return; [providers[i],providers[j]]=[providers[j],providers[i]]; renderProviders(); }
+
+function renderCreds() {
+  const need = credentials.length;
+  const have = credentials.filter(c=>c.set).length;
+  $('#credsCount').textContent = `${have}/${need} set`;
+  if (!need) { $('#creds').innerHTML = '<div class="hint">No keys needed for the keyless providers.</div>'; return; }
+  $('#creds').innerHTML = credentials.map(c => `<div class="cred">
+    <div class="top"><span class="dot ${c.set?'on':''}"></span><code>${c.env}</code> <span class="who">— ${c.usedBy.join(', ')}</span></div>
+    <div class="form">
+      <input type="password" id="key-${c.env}" placeholder="${c.set?'•••••• (set) — type to replace':'paste key…'}" />
+      <button class="sm" data-save="${c.env}">Save</button>
+      ${c.set?`<button class="sm ghost" data-clear="${c.env}">Clear</button>`:''}
+    </div>
+  </div>`).join('');
+  $('#creds').querySelectorAll('[data-save]').forEach(b => b.onclick = () => saveKey(b.dataset.save));
+  $('#creds').querySelectorAll('[data-clear]').forEach(b => b.onclick = () => saveKey(b.dataset.clear, ''));
+}
+
+async function saveKey(name, forced) {
+  const value = forced !== undefined ? forced : $('#key-'+name).value;
+  await fetch('/api/keys', {method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify({ name, value })});
+  status(value ? `saved ${name}` : `cleared ${name}`);
+  await load(); // re-evaluate configured status for every provider/judge
+  $('#credsBox').open = true;
+}
+
 function enabledOrder() { return providers.filter(p=>p.enabled).map(p=>p.name); }
 function status(t) { $('#status').textContent = t; }
 function esc(s){ return (s||'').replace(/[<>&]/g,c=>({'<':'&lt;','>':'&gt;','&':'&amp;'}[c])); }
@@ -139,6 +220,7 @@ async function runPipeline() {
   status('running ranked pipeline with judge="'+$('#judge').value+'"…'); $('#pipe').disabled = true;
   try {
     const r = await (await fetch('/api/pipeline', {method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify({ query, providers: order, judge: $('#judge').value, mode: $('#mode').value, minScore: +$('#min').value, mustNot: $('#mustnot').value || undefined, count: +$('#count').value })})).json();
+    if (r.error) { status('error: '+r.error); return; }
     const w = r.winner;
     const winnerHtml = w ? `<div class="winner">
       <img src="${w.src}" />
@@ -154,7 +236,7 @@ async function runPipeline() {
 $('#go').onclick = runGallery;
 $('#pipe').onclick = runPipeline;
 $('#q').addEventListener('keydown', e => { if(e.key==='Enter') runGallery(); });
-init();
+load();
 </script>
 </body>
 </html>

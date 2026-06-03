@@ -66,13 +66,19 @@ npm run serve          # → http://localhost:5190  (or: npm run build && npm st
 
 - **Search term** → **Run gallery** sources from every enabled provider *in order* and
   shows their candidates with license + attribution.
-- Drag the order with ▲ ▼ and toggle providers on/off; unconfigured ones (missing key)
-  are greyed out — your **own** credentials, read from env, decide what's available.
+- **Drag** providers to reorder and toggle them on/off; unconfigured ones (missing key)
+  are greyed out — your **own** credentials decide what's available.
+- **Credentials panel** — paste a key for any provider or the judge (e.g. `OPENAI_API_KEY`,
+  `UNSPLASH_ACCESS_KEY`) and it lights up instantly. Keys are held in the server's memory
+  for that session only: never written to disk, never logged, never echoed back, and only
+  ever sent to the provider you're calling. A key set once (like `OPENAI_API_KEY`) enables
+  both the `generate` provider and the `openai` judge.
 - Pick a **judge** + **mode**, then **Run pipeline** to run the real ranked loop and see
   which candidate won and why (the full decision trace).
 
 It calls the same engine the CLI does, over a tiny HTTP API (`GET /api/providers`,
-`POST /api/search`, `POST /api/pipeline`). No keys are bundled; nothing leaves your machine.
+`POST /api/keys`, `POST /api/search`, `POST /api/pipeline`). No keys are bundled; nothing
+leaves your machine.
 
 ## Configuration
 

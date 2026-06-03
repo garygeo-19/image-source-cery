@@ -5,11 +5,32 @@ import { loadEnv } from "./util.js";
 import { REGISTRY, getProvider } from "./providers.js";
 import { JUDGES } from "./judges.js";
 import { run } from "./engine.js";
-import type { Candidate, Ctx, Config } from "./types.js";
+import type { Candidate, Ctx, Config, Provider, Judge } from "./types.js";
 
-const env = loadEnv();
+const baseEnv = loadEnv();
 const PORT = Number(process.env.PORT ?? 5190);
 const PUBLIC = path.join(process.cwd(), "public");
+
+// ── Session key overlay ───────────────────────────────────────────────────────
+// Keys the user sets via the demo UI live ONLY here, in memory, for this process.
+// They are never written to disk, never logged, and never echoed back in any
+// response. The effective env is the process env with these overlaid on top.
+const overrides: Record<string, string> = {};
+const env = (): Record<string, string | undefined> => ({ ...baseEnv, ...overrides });
+const ctx = (): Ctx => ({ env: env(), options: {}, log: () => {} });
+
+// Discover which env var a provider/judge needs by reading its own configured()
+// message against an empty env (e.g. "set UNSPLASH_ACCESS_KEY" → UNSPLASH_ACCESS_KEY).
+function keyEnvOf(thing: Provider | Judge): string | null {
+  try {
+    const r = thing.configured({ env: {}, options: {}, log: () => {} });
+    if (r === true) return null;
+    const m = /set ([A-Z][A-Z0-9_]*)/.exec(r);
+    return m ? m[1] : null;
+  } catch {
+    return null;
+  }
+}
 
 function src(c: Candidate): string | null {
   if (c.url) return c.url;
@@ -36,15 +57,37 @@ const server = createServer(async (req, res) => {
   };
 
   try {
-    // ── List providers + judges + which are configured for this user ──────────
+    // ── List providers + judges, each with required key + configured status ────
     if (req.method === "GET" && url.pathname === "/api/providers") {
-      const ctx: Ctx = { env, options: {}, log: () => {} };
-      return json({
-        providers: Object.entries(REGISTRY).map(([name, p]) => ({
-          name, kind: p.kind, configured: p.configured(ctx),
-        })),
-        judges: Object.keys(JUDGES),
-      });
+      const e = env();
+      const providers = Object.entries(REGISTRY).map(([name, p]) => ({
+        name, kind: p.kind, configured: p.configured(ctx()), keyEnv: keyEnvOf(p),
+      }));
+      const judges = Object.entries(JUDGES).map(([name, j]) => ({
+        name, configured: j.configured(ctx()), keyEnv: keyEnvOf(j),
+      }));
+      // Unique set of credentials any provider/judge wants, with set-status + users.
+      const cred: Record<string, { env: string; set: boolean; usedBy: string[] }> = {};
+      const note = (envName: string | null, who: string) => {
+        if (!envName) return;
+        (cred[envName] ??= { env: envName, set: !!e[envName], usedBy: [] }).usedBy.push(who);
+      };
+      providers.forEach((p) => note(p.keyEnv, p.name));
+      judges.forEach((j) => note(j.keyEnv, `${j.name} (judge)`));
+      return json({ providers, judges, credentials: Object.values(cred) });
+    }
+
+    // ── Set / clear a credential for this session (env var by NAME) ─────────────
+    // Body: { name: "OPENAI_API_KEY", value: "sk-..." }. Empty value clears it.
+    // Response NEVER contains the secret — only whether that name is now set.
+    if (req.method === "POST" && url.pathname === "/api/keys") {
+      const { name, value } = await body(req);
+      if (typeof name !== "string" || !/^[A-Z][A-Z0-9_]*$/.test(name)) {
+        return json({ error: "name must be an ENV_VAR style identifier" }, 400);
+      }
+      if (typeof value === "string" && value.trim()) overrides[name] = value.trim();
+      else delete overrides[name];
+      return json({ ok: true, name, set: !!env()[name] });
     }
 
     // ── Gallery: run EVERY requested provider, return all candidates ──────────
@@ -56,14 +99,13 @@ const server = createServer(async (req, res) => {
         : Object.keys(REGISTRY).filter((n) => n !== "generate");
       const results: any[] = [];
       for (const name of order) {
-        const ctx: Ctx = { env, options: {}, log: () => {} };
         let provider;
         try { provider = getProvider(name); } catch { results.push({ provider: name, error: "unknown provider" }); continue; }
-        const ok = provider.configured(ctx);
+        const ok = provider.configured(ctx());
         if (ok !== true) { results.push({ provider: name, kind: provider.kind, skipped: ok, candidates: [] }); continue; }
         const t0 = Date.now();
         try {
-          const cands = await provider.provide({ query, count: count ?? 3 }, ctx);
+          const cands = await provider.provide({ query, count: count ?? 3 }, ctx());
           results.push({
             provider: name, kind: provider.kind, ms: Date.now() - t0,
             candidates: cands.map((c) => ({ src: src(c), title: c.title, license: c.license, attribution: c.attribution, sourceUrl: c.sourceUrl })).filter((c) => c.src),
@@ -87,7 +129,7 @@ const server = createServer(async (req, res) => {
       const log: string[] = [];
       const result = await run(
         { query: b.query, mustShow: b.mustShow, mustNotConfuse: b.mustNot, minScore: b.minScore, count: b.count ?? 3 },
-        config, env, (m) => log.push(m),
+        config, env(), (m) => log.push(m),
       );
       return json({
         ok: result.ok,
