@@ -1,0 +1,14 @@
+node_modules/
+dist/
+*.tsbuildinfo
+
+# Secrets — never commit
+.env
+.env.*
+*.env
+
+# Local scratch / review images
+/tmp/
+review/
+out/
+*.local.json

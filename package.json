@@ -1,0 +1,25 @@
+{
+  "name": "image-sourcery",
+  "version": "0.1.0",
+  "description": "Ranked image sourcing, with a judge. A unified pipeline that sources or generates an image from a user-ranked list of providers and uses a pluggable judge to advance until it finds a satisfactory one.",
+  "type": "module",
+  "bin": {
+    "imgsrcy": "dist/cli.js"
+  },
+  "main": "dist/index.js",
+  "files": ["dist", "image-sourcery.config.example.json", "README.md", "LICENSE"],
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx src/cli.ts",
+    "doctor": "tsx src/cli.ts doctor",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": ["images", "image-search", "image-generation", "pipeline", "wikimedia", "unsplash", "library-of-congress", "inaturalist", "openai", "mcp", "cli"],
+  "license": "MIT",
+  "engines": { "node": ">=18" },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "tsx": "^4.7.0",
+    "typescript": "^5.4.0"
+  }
+}
