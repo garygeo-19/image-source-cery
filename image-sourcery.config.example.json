@@ -10,6 +10,7 @@
     { "provider": "inaturalist", "license": ["cc0", "cc-by", "cc-by-nc"] },
     { "provider": "loc" },
     { "provider": "unsplash", "apiKeyEnv": "UNSPLASH_ACCESS_KEY" },
+    { "provider": "pexels", "apiKeyEnv": "PEXELS_API_KEY" },
     { "provider": "generate", "model": "gpt-image-1", "size": "1024x1024", "quality": "medium", "apiKeyEnv": "OPENAI_API_KEY" }
   ]
 }

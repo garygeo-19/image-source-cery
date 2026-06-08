@@ -93,6 +93,7 @@ ranked `pipeline` + `judge`. Credentials are referenced by env-var **name** only
     { "provider": "inaturalist", "license": ["cc0", "cc-by"] },
     { "provider": "loc" },
     { "provider": "unsplash", "apiKeyEnv": "UNSPLASH_ACCESS_KEY" },
+    { "provider": "pexels", "apiKeyEnv": "PEXELS_API_KEY" },
     { "provider": "generate", "model": "gpt-image-1", "apiKeyEnv": "OPENAI_API_KEY" }
   ]
 }
@@ -112,6 +113,7 @@ Put keys in your shell env or a local `.env` (gitignored). Nothing is bundled.
 | `met` | none | public-domain art & artifacts (The Met) |
 | `smithsonian` | `SMITHSONIAN_API_KEY` | art, history, natural science (free key) |
 | `unsplash` | `UNSPLASH_ACCESS_KEY` | modern stock photography, mood |
+| `pexels` | `PEXELS_API_KEY` | modern stock photography & video stills |
 | `generate` | `OPENAI_API_KEY` | anything nothing else has (gpt-image-1) |
 
 Judges: `openai` (vision), `human` (interactive), `none` (accept first).
@@ -145,10 +147,10 @@ Register it, drop it into your ranked `pipeline`, done.
 
 ## Roadmap
 
-- ✅ Providers: Wikimedia, iNaturalist, LoC, Openverse, NASA, The Met, Smithsonian, Unsplash, generate
+- ✅ Providers: Wikimedia, iNaturalist, LoC, Openverse, NASA, The Met, Smithsonian, Unsplash, Pexels, generate
 - ✅ Multi-candidate `--best` mode; provenance sidecar manifests
 - ✅ Demo web UI (`npm run serve`) — gallery + judged pipeline over a tiny HTTP API
-- More providers: Europeana, Flickr Commons, GBIF, Pexels, Pixabay
+- More providers: Europeana, Flickr Commons, GBIF, Pixabay
 - More judges/generators: Anthropic & Gemini vision; Imagen, Flux, local Stable Diffusion
 - **MCP server** so any agent (Claude Code, Cursor) can call it as tools
 - Cost ledger + budgets, response/image caching

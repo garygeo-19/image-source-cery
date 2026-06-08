@@ -121,6 +121,29 @@ export const unsplash: Provider = {
   },
 };
 
+// ── Pexels (key: PEXELS_API_KEY) ──────────────────────────────────────────────
+export const pexels: Provider = {
+  name: "pexels",
+  kind: "search",
+  configured: (ctx) => {
+    const k = ctx.options.apiKeyEnv ?? "PEXELS_API_KEY";
+    return ctx.env[k] ? true : `set ${k}`;
+  },
+  async provide(req, ctx) {
+    const key = ctx.env[ctx.options.apiKeyEnv ?? "PEXELS_API_KEY"]!;
+    const data = await getJSON(
+      `https://api.pexels.com/v1/search?query=${encodeURIComponent(req.query)}` +
+        `&per_page=${req.count ?? 5}&orientation=landscape`,
+      { Authorization: key },
+    );
+    return (data.photos ?? []).map((p: any) => ({
+      url: p.src?.large ?? p.src?.original, provider: "pexels", title: p.alt || undefined,
+      attribution: `Pexels · ${p.photographer ?? ""}`.trim(), license: "Pexels License",
+      sourceUrl: p.url,
+    }));
+  },
+};
+
 // ── Generate via OpenAI gpt-image-1 (key: OPENAI_API_KEY) ─────────────────────
 // Generation is just another provider. It always "succeeds" at returning bytes;
 // the judge still decides whether what it drew is correct.
@@ -262,7 +285,7 @@ export const smithsonian: Provider = {
 };
 
 export const REGISTRY: Record<string, Provider> = {
-  wikimedia, inaturalist, loc, unsplash, openverse, nasa, met, smithsonian, generate,
+  wikimedia, inaturalist, loc, unsplash, pexels, openverse, nasa, met, smithsonian, generate,
 };
 
 export function getProvider(name: string): Provider {

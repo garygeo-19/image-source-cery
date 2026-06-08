@@ -9,6 +9,7 @@ export const DEFAULT_CONFIG: Config = {
     { provider: "inaturalist" },
     { provider: "loc" },
     { provider: "unsplash", apiKeyEnv: "UNSPLASH_ACCESS_KEY" },
+    { provider: "pexels", apiKeyEnv: "PEXELS_API_KEY" },
   ],
 };
 
