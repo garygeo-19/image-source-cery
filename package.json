@@ -16,7 +16,7 @@
     "start": "node dist/server.js",
     "prepublishOnly": "npm run build"
   },
-  "keywords": ["images", "image-search", "image-generation", "pipeline", "wikimedia", "unsplash", "library-of-congress", "inaturalist", "openai", "mcp", "cli"],
+  "keywords": ["images", "image-search", "image-generation", "pipeline", "wikimedia", "unsplash", "pexels", "library-of-congress", "inaturalist", "openai", "mcp", "cli"],
   "license": "MIT",
   "engines": { "node": ">=18" },
   "devDependencies": {
