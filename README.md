@@ -122,7 +122,8 @@ Put keys in your shell env or a local `.env` (gitignored). Nothing is bundled.
 | `pexels` | `PEXELS_API_KEY` | modern stock photography & video stills |
 | `generate` | `OPENAI_API_KEY` | anything nothing else has (gpt-image-1) |
 
-Judges: `openai` (vision), `human` (interactive), `none` (accept first).
+Judges: `openai` (vision), `human` (interactive), `none` (accept first), `agent` (deferred —
+see [Judging with an agent](#judging-with-an-agent)).
 
 ### Profiles — saved paths
 
@@ -270,6 +271,26 @@ already holds the surrounding context can decide with the evidence in hand.
 
 `title-adjacency` needs only metadata, so bytes are fetched lazily — candidates are
 downloaded once something actually has to look at the picture, not before.
+
+### Judging with an agent
+
+When the caller *is* the judge — Claude Code, Cursor, any model that can view the pool —
+say so:
+
+```jsonc
+{ "judge": { "provider": "agent" }, "profile": "agent" }
+```
+
+The `agent` judge never scores in-process. A profile that ends in `select: "defer"` (the
+built-in `agent` profile does) gathers, runs the licence gate and the deterministic name
+check, and hands the scored pool back; you view the images and choose. Any config that
+would ask it to score synchronously — `score: "judge"`, `select: "compare"`, or the
+legacy `pipeline` form — is refused **before a single provider is called**, so a stray
+stage can never fall through to a paid vision API. `imgsrcy doctor` reports it as
+`deferred (external agent)`.
+
+Previously the only way to get that guarantee was to point `judge.provider` at a name
+that did not exist. Now the arrangement has one.
 
 ### Tuning
 

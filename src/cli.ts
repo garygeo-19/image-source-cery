@@ -50,6 +50,9 @@ const CAPABILITIES = {
     "judge.unavailableThrows": true,
     // NC/ND candidates are dropped by every built-in profile before anything scores.
     "filter.usableLicense": true,
+    // `judge.provider: "agent"` is valid config: judging is deferred to an external
+    // agent, and any in-process scoring path refuses before a provider is called.
+    "judge.agent": true,
   },
 };
 
@@ -81,7 +84,7 @@ Options for find:
   --out <path>            save the chosen image here
   --profile <name>        run a named profile (see 'imgsrcy profiles')
   --providers a,b,c       override the ranked pipeline (e.g. wikimedia,inaturalist,generate)
-  --judge none|openai|human   override the judge
+  --judge none|openai|human|agent   override the judge (agent = deferred, see 'gather')
   --best                  judge ALL candidates and keep the highest scorer
   --parallel              gather the whole pipeline AT ONCE (pool) and pick the best
                           comparatively — fan-out instead of sequential cascade
@@ -138,7 +141,11 @@ async function main() {
     console.log(`Judge: ${config.judge.provider}`);
     const jctx: Ctx = { env, options: config.judge, log: () => {} };
     const j = JUDGES[config.judge.provider];
-    console.log(`  ${j ? (j.configured(jctx) === true ? "✓ ready" : "✗ " + j.configured(jctx)) : "✗ unknown judge"}`);
+    const judgeStatus = !j ? "✗ unknown judge"
+      : j.deferred ? "– deferred (external agent): judge the gathered pool out of process via select \"defer\""
+      : j.configured(jctx) === true ? "✓ ready"
+      : "✗ " + j.configured(jctx);
+    console.log(`  ${judgeStatus}`);
     console.log(`Pipeline (ranked):`);
     for (const entry of config.pipeline.flatMap((s: any) => ("parallel" in s ? s.parallel : [s]))) {
       let status = "✗ unknown provider";

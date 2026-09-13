@@ -79,7 +79,9 @@ export const BUILT_IN_PROFILES: Record<string, Profile> = {
   agent: {
     name: "agent",
     description: "Gather + deterministic check, then defer the choice to the caller.",
-    judge: { provider: "none" },
+    // Named, not "none": if a copy of this profile ever grows a judge stage, it
+    // fails before any provider is called instead of quietly accepting everything.
+    judge: { provider: "agent" },
     stages: [
       { gather: [...NAMED_SUBJECT_SOURCES, ...STOCK_SOURCES] },
       { filter: "usable-license" },

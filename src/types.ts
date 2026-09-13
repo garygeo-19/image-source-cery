@@ -99,6 +99,14 @@ export interface Verdict {
 
 export interface Judge {
   name: string;
+  /**
+   * This judge never scores IN-PROCESS: judging happens out of process, on the
+   * pool that `select: "defer"` hands back. The engine refuses to run a
+   * scoring stage (`score: "judge"`, `select: "compare"`, or the legacy
+   * pipeline) with such a judge, before any provider is called, so a config
+   * that names it can never fall through to a paid API by accident.
+   */
+  deferred?: boolean;
   configured(ctx: Ctx): true | string;
   /** Absolute, per-candidate verdict (sequential / first-pass path). */
   evaluate(candidate: Candidate, req: ImageRequest, ctx: Ctx): Promise<Verdict>;

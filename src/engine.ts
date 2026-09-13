@@ -1,6 +1,6 @@
 import type {
   Config, ImageRequest, RunResult, Candidate, Verdict, Ctx, Attempt,
-  PipelineEntry, PipelineStage, Profile, Scored,
+  PipelineEntry, PipelineStage, Profile, Scored, Judge,
 } from "./types.js";
 import type { ScorerCtx } from "./stages.js";
 import { corpusOf, getFilter, getScorer, isFilter, isGather, isScore, isSelect } from "./stages.js";
@@ -57,6 +57,13 @@ export class JudgeUnavailableError extends Error {
     this.attempts = info.attempts;
     this.profile = info.profile;
   }
+}
+
+/** The message for a config that asks a deferred judge to score in-process. */
+function deferredJudgeRefusal(judge: Judge, where: string): string {
+  return `judge "${judge.name}" is deferred, but ${where}. ` +
+    `Judging is done out of process by an external agent: use \`select: "defer"\` ` +
+    `(or the built-in "agent" profile) and judge the gathered pool yourself.`;
 }
 
 /** Expand the configured pipeline into a list of stages, each a list of
@@ -137,6 +144,9 @@ export async function run(
 
   const judge = getJudge(config.judge.provider);
   const judgeCtx: Ctx = { env, options: config.judge, log };
+  // The legacy pipeline always judges in-process. A deferred judge cannot, so
+  // refuse here — before a single provider is called.
+  if (judge.deferred) throw new Error(deferredJudgeRefusal(judge, "the pipeline/mode form judges every candidate in-process"));
   const jok = judge.configured(judgeCtx);
   if (jok !== true) throw new Error(`judge "${judge.name}" not configured: ${jok}`);
 
@@ -300,6 +310,11 @@ export async function runStages(
     (s) => isScore(s) && getScorer(typeof s.score === "string" ? s.score : s.score.scorer).usesJudge,
   ) || profile.stages.some((s) => isSelect(s) && s.select === "compare");
   if (needsJudge) {
+    // A deferred judge never scores in-process. Refuse before any gather, so a
+    // profile that names one cannot bill a provider on the way to failing.
+    if (judge.deferred) {
+      throw new Error(deferredJudgeRefusal(judge, `profile "${profile.name}" has a stage that judges in-process`));
+    }
     const ok = judge.configured(judgeCtx);
     if (ok !== true) throw new Error(`judge "${judge.name}" not configured: ${ok}`);
   }
