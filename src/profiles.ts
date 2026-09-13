@@ -3,6 +3,10 @@
 // scored how, and who decides. They are plain data so you can list them, copy
 // one into your own config, edit it, and keep the name.
 //
+// Every profile drops NonCommercial and NoDerivatives candidates straight after
+// its gather (`usable-license`), before anything scores: a candidate that can
+// never be used must never cost a judge call. Override a profile to opt out.
+//
 // Pick by what the SUBJECT is, not by what you have credentials for:
 //   a named person or artifact  → "archive-first" (or "verified" to skip the LLM)
 //   a generic scene or activity → "stock"
@@ -38,6 +42,7 @@ export const BUILT_IN_PROFILES: Record<string, Profile> = {
     description: "Archives first, deterministic name check, then the judge. Best for named subjects.",
     stages: [
       { gather: NAMED_SUBJECT_SOURCES },
+      { filter: "usable-license" },
       { score: "title-adjacency" },
       { filter: "passing" },
       { score: "judge" },
@@ -57,6 +62,7 @@ export const BUILT_IN_PROFILES: Record<string, Profile> = {
     judge: { provider: "none" },
     stages: [
       { gather: NAMED_SUBJECT_SOURCES },
+      { filter: "usable-license" },
       { score: "title-adjacency" },
       { filter: "passing" },
       { select: "best" },
@@ -76,6 +82,7 @@ export const BUILT_IN_PROFILES: Record<string, Profile> = {
     judge: { provider: "none" },
     stages: [
       { gather: [...NAMED_SUBJECT_SOURCES, ...STOCK_SOURCES] },
+      { filter: "usable-license" },
       { score: "title-adjacency" },
       { select: "defer" },
     ],
@@ -101,6 +108,7 @@ export const BUILT_IN_PROFILES: Record<string, Profile> = {
     description: "Stock for a named subject: a generic image is fine, a different named one is not.",
     stages: [
       { gather: STOCK_SOURCES },
+      { filter: "usable-license" },
       { filter: "no-other-name" },
       { score: "judge" },
       // A unique subject deserves a stricter bar: for a KIND any good example is
@@ -121,6 +129,7 @@ export const BUILT_IN_PROFILES: Record<string, Profile> = {
     description: "Stock libraries for generic scenes. No identity checking.",
     stages: [
       { gather: STOCK_SOURCES },
+      { filter: "usable-license" },
       { score: "judge" },
       { filter: "min-score" },
       { select: "first" },
@@ -136,6 +145,7 @@ export const BUILT_IN_PROFILES: Record<string, Profile> = {
     description: "Gather everything in parallel, one comparative judgement.",
     stages: [
       { gather: [...NAMED_SUBJECT_SOURCES, ...STOCK_SOURCES] },
+      { filter: "usable-license" },
       { score: "title-adjacency" },
       { filter: "passing" },
       { select: "compare" },

@@ -48,6 +48,8 @@ const CAPABILITIES = {
     // a stage on which every candidate errored throws JudgeUnavailableError.
     "attempts.scorerError": true,
     "judge.unavailableThrows": true,
+    // NC/ND candidates are dropped by every built-in profile before anything scores.
+    "filter.usableLicense": true,
   },
 };
 

@@ -26,6 +26,14 @@
           ]
         },
         {
+          "_comment": "Drop NC/ND before anything scores (every built-in profile does). Add \"allowNonCommercial\": true or \"allowNoDerivatives\": true to the filter object if you can honour that clause.",
+          "filter": [
+            {
+              "filter": "usable-license"
+            }
+          ]
+        },
+        {
           "score": "title-adjacency"
         },
         {
@@ -45,6 +53,9 @@
               "provider": "openverse"
             }
           ]
+        },
+        {
+          "filter": "usable-license"
         },
         {
           "score": "title-adjacency"

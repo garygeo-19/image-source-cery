@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   BUILT_IN_PROFILES, FILTERS, JUDGES, REGISTRY, getProfile, listProfiles, run, titleAdjacency,
+  unusableLicense,
 } from "../dist/index.js";
 
 const png = Buffer.from("89504e470d0a1a0a", "hex");
@@ -190,6 +191,22 @@ test("built-in profiles are well formed", () => {
   }
 });
 
+// A candidate that can never be used must never cost a judge call — or any
+// score at all. The gate sits between the first gather and the first scorer.
+test("every built-in profile drops NC/ND before anything scores", () => {
+  const usesLicenseGate = (s) => {
+    if (s.filter === undefined) return false;
+    const specs = Array.isArray(s.filter) ? s.filter : [s.filter];
+    return specs.some((f) => (typeof f === "string" ? f : f.filter) === "usable-license");
+  };
+  for (const [name, profile] of Object.entries(BUILT_IN_PROFILES)) {
+    const gate = profile.stages.findIndex(usesLicenseGate);
+    const firstScore = profile.stages.findIndex((s) => s.score !== undefined || s.select === "compare");
+    assert.ok(gate >= 0, `${name} must run usable-license`);
+    assert.ok(firstScore < 0 || gate < firstScore, `${name} must gate licences before it scores`);
+  }
+});
+
 test("archive-first checks identity before it spends a judge call", () => {
   const stages = BUILT_IN_PROFILES["archive-first"].stages;
   const deterministic = stages.findIndex((s) => s.score === "title-adjacency");
@@ -348,4 +365,127 @@ test("stock-safe screens competing names before it spends a judge call", () => {
   // And it must NOT use the strict adjacency check: stock captions do not name
   // ancient philosophers, so requiring a match kills the honest generics too.
   assert.ok(!stages.some((s) => s.score === "title-adjacency"));
+});
+
+// ── usable-license ──────────────────────────────────────────────────────────
+// NoDerivatives is breached by any consumer that resizes or re-encodes; NonCommercial
+// the moment anything is monetised. 143 NC and 82 ND images reached a production
+// catalogue before this gate existed, most of them from the archives — the corpus a
+// named subject is sent to first — because the consumer's first version read only
+// the first token of the licence string. Every case asserts BOTH directions: a
+// reject-predicate only ever seen returning null is indistinguishable from one
+// that always does.
+const lic = (license, options = {}) =>
+  FILTERS["usable-license"].reject({ provider: "fixture", license }, {}, ctx, options);
+
+test("unusableLicense reads every token, not the first", () => {
+  // The strings actually found in a consumer's image manifest.
+  assert.equal(unusableLicense("wallyg (Openverse) · by-nc-nd 2.0"), "nd", "Openverse lowercase by-nc-nd");
+  assert.equal(unusableLicense("APK · CC BY-NC-ND 2.0"), "nd", 'Wikimedia "CC BY-NC-ND 2.0" — the clause is the SECOND token');
+  assert.equal(unusableLicense("someone · CC BY-NC 4.0"), "nc", "NonCommercial alone is refused");
+  assert.equal(unusableLicense("someone · by-nd"), "nd", "NoDerivatives alone is refused");
+  assert.equal(unusableLicense("CC BY-NC-SA 3.0"), "nc", "NC survives an SA clause");
+
+  // Everything a catalogue legitimately serves.
+  assert.equal(unusableLicense("APK · CC BY 4.0"), null, "plain CC BY must serve");
+  assert.equal(unusableLicense("someone · CC BY-SA 3.0"), null, "ShareAlike is usable");
+  assert.equal(unusableLicense("CC0"), null, "public domain is usable");
+  assert.equal(unusableLicense("Pexels · Jane Doe"), null, "a Pexels credit must never be read as a licence code");
+  assert.equal(unusableLicense("AI-generated (gpt-image-1.5)"), null, "generated images must serve");
+  assert.equal(unusableLicense("Unsplash · Someone"), null, "Unsplash must serve");
+  assert.equal(unusableLicense(""), null, "no claim is not a refusal");
+  assert.equal(unusableLicense(undefined), null, "no claim is not a refusal");
+});
+
+test("a bare code is a clause only when it is the whole field or CC is named", () => {
+  // The trap the first version fell into: prose words are not clause codes.
+  assert.equal(unusableLicense("Photo by ND Smith, National Archives"), null,
+    '"ND" as somebody\'s initials inside prose is not a NoDerivatives clause');
+  assert.equal(unusableLicense("Nic Coury for the NC Museum"), null,
+    '"NC" inside a proper noun is not a NonCommercial clause');
+  // A bare code that IS the whole field is a clause; the same code inside prose is not.
+  assert.equal(unusableLicense("ND"), "nd", 'a license field that is literally "ND" is a clause');
+  assert.equal(unusableLicense("NC"), "nc", 'so is a bare "NC"');
+  assert.equal(unusableLicense("nc"), "nc");
+});
+
+test("usable-license fires on the two clauses that cannot be honoured", () => {
+  assert.ok(lic("by-nd 2.0"), "rejects by-nd");
+  assert.ok(lic("by-nc 2.0"), "rejects by-nc");
+  assert.ok(lic("by-nc-sa 2.0"), "rejects by-nc-sa");
+  assert.ok(lic("by-nc-nd 2.0"), "rejects by-nc-nd");
+  assert.match(lic("by-nc-nd 2.0"), /NoDerivatives/, "names ND first — it is the clause already being broken");
+  assert.match(lic("by-nc-sa 4.0"), /NonCommercial/, "names NC when ND is absent");
+
+  // The format the ARCHIVES use, and the reason the consumer's filter was half-blind.
+  assert.ok(lic("CC BY-NC-SA 3.0"), "rejects the CC-prefixed Wikimedia format (was silently allowed)");
+  assert.ok(lic("CC BY-NC-ND 2.0"), "rejects CC BY-NC-ND (was silently allowed)");
+  assert.ok(lic("CC-BY-NC"), "rejects the hyphenated Wellcome id");
+  assert.ok(lic("Attribution-NonCommercial-NoDerivatives 4.0 International"), "rejects the spelled-out Creative Commons name");
+  assert.ok(lic("Attribution-NonCommercial 4.0"), "rejects the spelled-out NonCommercial");
+  assert.ok(lic("ND"), "a bare clause code is still a clause");
+  assert.ok(lic("nc"), "so is a bare lowercase one");
+});
+
+test("usable-license stays silent on everything a catalogue legitimately runs on", () => {
+  for (const ok of [
+    "by-sa 2.0", "by 2.0", "CC BY-SA 4.0", "CC BY 2.0", "cc0 1.0", "CC0", "CC0 (verify)",
+    "pdm 1.0", "Public Domain", "Public Domain (NASA — verify usage)",
+    "Pexels License", "Unsplash License",
+    "No known restrictions (verify at source)", "See Wikimedia Commons (per-file)",
+  ]) assert.equal(lic(ok), null, `allows ${JSON.stringify(ok)}`);
+
+  // Unknown is ALLOWED on purpose: this rejects the two clauses we know cannot be
+  // honoured, it does not adjudicate every licence in the world.
+  assert.equal(lic(""), null, "a candidate claiming no licence is not rejected here");
+  assert.equal(lic(undefined), null, "a missing licence field does not throw");
+  assert.equal(lic("Some Museum Terms of Use"), null, "an unrecognised licence is allowed, not guessed at");
+});
+
+test("usable-license matches licence codes, never attribution names", () => {
+  // The clause vocabulary enforces it: "ndlovu" is not a clause word, so the
+  // token is never read as a licence code at all.
+  assert.equal(lic("CC BY 2.0 — photo by Sipho Ndlovu"), null, "a photographer named Ndlovu does not trip the ND clause");
+  assert.equal(lic("Ndlovu · CC BY 4.0"), null);
+  assert.equal(lic("Photo by ND Smith"), null);
+  assert.equal(lic("CC BY-SA 4.0, Ndiaye/Ncube"), null, "nor do surnames beginning nc/nd");
+  assert.equal(
+    FILTERS["usable-license"].reject(
+      { provider: "fixture", license: "CC BY 2.0", attribution: "Ndlovu, NoDerivatives Studio" }, {}, ctx, {}),
+    null, "the attribution string is not consulted at all");
+});
+
+test("usable-license options let a consumer keep a clause it can honour", () => {
+  assert.equal(lic("CC BY-NC 4.0", { allowNonCommercial: true }), null);
+  assert.equal(lic("CC BY-ND 4.0", { allowNoDerivatives: true }), null);
+  // Allowing one clause does not allow the other.
+  assert.match(lic("CC BY-NC-ND 4.0", { allowNoDerivatives: true }), /NonCommercial/);
+  assert.match(lic("CC BY-NC-ND 4.0", { allowNonCommercial: true }), /NoDerivatives/);
+  assert.equal(lic("CC BY-NC-ND 4.0", { allowNonCommercial: true, allowNoDerivatives: true }), null);
+});
+
+test("an NC/ND candidate is dropped before the judge sees it, and the drop is recorded", async () => {
+  const judgeName = "licence-gate-judge";
+  const judged = [];
+  JUDGES[judgeName] = {
+    name: judgeName, configured: () => true,
+    evaluate: async (c) => { judged.push(c.title); return { score: 0.9, passes: true, reason: "fine" }; },
+  };
+  const p = fixtureProvider("licence-src", [
+    { title: "restricted", license: "CC BY-NC-ND 2.0" },
+    { title: "free", license: "CC BY 4.0" },
+  ]);
+  try {
+    const result = await run({ query: "x" }, {
+      judge: { provider: judgeName },
+      profile: "stock",
+      profiles: { stock: { ...BUILT_IN_PROFILES.stock, stages: BUILT_IN_PROFILES.stock.stages.map((s) => (s.gather ? { gather: [p] } : s)) } },
+    }, {});
+    assert.deepEqual(judged, ["free"], "the NC/ND candidate must never cost a judge call");
+    assert.equal(result.candidate.title, "free");
+    const dropped = result.attempts.find((a) => a.reason.startsWith("usable-license:"));
+    assert.match(dropped.reason, /NoDerivatives licence \(CC BY-NC-ND 2\.0\)/);
+  } finally {
+    delete JUDGES[judgeName];
+  }
 });

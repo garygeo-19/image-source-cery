@@ -9,5 +9,6 @@ export { BUILT_IN_PROFILES, getProfile, listProfiles } from "./profiles.js";
 export {
   SCORERS, FILTERS, getScorer, getFilter, registerScorer, registerFilter,
   titleAdjacency, namedRun, significantParts, corpusOf, PROPER_NOUN,
+  unusableLicense, licenseClauses,
 } from "./stages.js";
 export type { Scorer, Filter, ScorerCtx } from "./stages.js";

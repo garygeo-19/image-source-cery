@@ -156,6 +156,7 @@ cascade: try the precise source, fall through only if nothing was chosen.
       "description": "Archives, name-checked, no LLM.",
       "stages": [
         { "gather": [{ "provider": "wikipedia" }, { "provider": "loc" }] },
+        { "filter": "usable-license" },   // drop NC/ND before anything scores
         { "score": "title-adjacency" },   // deterministic identity check
         { "filter": "passing" },
         { "select": "best" }
@@ -166,7 +167,8 @@ cascade: try the precise source, fall through only if nothing was chosen.
 ```
 
 Scorers: `title-adjacency` (deterministic, metadata-only), `judge` (vision), `none`.
-Filters: `min-score`, `passing`, `has-title`, `archive-only`, `no-other-name`, `no-synthetic`.
+Filters: `min-score`, `passing`, `has-title`, `archive-only`, `no-other-name`, `no-synthetic`,
+`usable-license`.
 Selects: `first`, `best`, `compare`, `defer`.
 
 ### Loosely related is acceptable; wrong identity is not
@@ -183,6 +185,35 @@ check either useless or crippling:
 is the permissive one: allow anything that names nothing, reject anything that names a
 competitor. Use the first against archives, the second when a named subject has fallen
 through to stock.
+
+### NonCommercial and NoDerivatives are refused by default
+
+Two Creative Commons clauses are incompatible with how most consumers of a sourced image
+behave, and every built-in profile drops them straight after its gather, before anything
+scores — a candidate that can never be used must never cost a judge call:
+
+- **ND (NoDerivatives)** — resizing or re-encoding the image is a derivative work. If your
+  pipeline touches the bytes at all, you are already breaking it.
+- **NC (NonCommercial)** — a bet on the business model. Any paid tier, ad or sponsorship
+  makes every NC image a breach, retroactively, across every build that shipped it.
+
+The `usable-license` filter reads **every** token of the licence string, because the two
+formats in the wild disagree: Openverse reports `by-nc-sa 4.0`, Wikimedia reports
+`CC BY-NC-ND 2.0`, and a first-token check passes the second one as `cc`. It matches
+licence **codes** only, never attribution names — `Photo by ND Smith` and
+`Ndlovu · CC BY 4.0` pass; `CC BY-NC-ND 2.0`, `by-nc-sa 4.0`,
+`Attribution-NonCommercial 4.0` and a bare `nc` do not. An empty or unrecognised licence
+passes: the filter rejects the two clauses it knows cannot be honoured, it does not
+adjudicate every licence in the world.
+
+If you *can* honour a clause, say so per profile:
+
+```jsonc
+{ "filter": { "filter": "usable-license", "allowNonCommercial": true } }   // or allowNoDerivatives
+```
+
+`unusableLicense(license)` — `"nc" | "nd" | null` — is exported so a serving-side gate can
+share the exact same rule.
 
 ### Uniqueness
 
