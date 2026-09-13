@@ -253,6 +253,11 @@ export const FILTERS: Record<string, Filter> = {
   "min-score": {
     name: "min-score",
     reject: (c, req, _ctx, options) => {
+      // A scorer that threw left score 0 behind, and "scored 0.00 < 0.7" is a
+      // sentence about the picture. It is not: nothing looked at it. Returning
+      // the error as the reason is what lets a stored trace tell an outage
+      // apart from a run that genuinely found nothing good.
+      if (c.scorerError) return c.reason || `scorer error: ${c.scorerError}`;
       const base = options?.min ?? req.minScore ?? 0.7;
       const floor = c.subjectIsUnique && options?.whenUnique !== undefined
         ? options.whenUnique
@@ -264,7 +269,10 @@ export const FILTERS: Record<string, Filter> = {
   },
   passing: {
     name: "passing",
-    reject: (c) => (c.passes ? null : c.reason || "did not pass"),
+    reject: (c) => {
+      if (c.scorerError) return c.reason || `scorer error: ${c.scorerError}`;
+      return c.passes ? null : c.reason || "did not pass";
+    },
   },
   "has-title": {
     name: "has-title",

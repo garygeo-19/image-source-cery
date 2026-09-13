@@ -10,6 +10,55 @@ import { getProvider } from "./providers.js";
 import { getJudge } from "./judges.js";
 import { download } from "./util.js";
 
+/**
+ * Thrown when a scorer errored on EVERY candidate it was given.
+ *
+ * A judge that throws on all of them is dead, not strict: a 429, an expired
+ * key, an exhausted balance. Each such candidate still scores 0 and fails, and
+ * a run that merely carried on would then report "no acceptable image" for a
+ * subject nobody looked at — a false negative, stored as fact. So the engine
+ * stops instead. Opt out with `judge.whenUnavailable: "continue"`.
+ *
+ * `attempts` is the trace up to the failure, and `errors` the distinct messages
+ * the scorer threw, so a caller can tell a rate limit from a revoked key.
+ */
+export class JudgeUnavailableError extends Error {
+  /** The scorer that threw — "judge" in a staged run, the judge's own name in the legacy path. */
+  readonly scorer: string;
+  /** The configured judge behind it. */
+  readonly judge: string;
+  /** Distinct messages thrown, in first-seen order. */
+  readonly errors: string[];
+  /** How many candidates the stage was given. All of them errored. */
+  readonly candidates: number;
+  /** Scorer errors over the whole run so far, this stage included. */
+  readonly scorerErrors: number;
+  /** The decision trace up to the failure. */
+  readonly attempts: Attempt[];
+  readonly profile?: string;
+  constructor(info: {
+    scorer: string; judge: string; errors: string[]; candidates: number;
+    scorerErrors: number; attempts: Attempt[]; profile?: string;
+  }) {
+    const distinct = [...new Set(info.errors)];
+    const who = info.scorer === info.judge
+      ? `judge "${info.judge}"`
+      : `scorer "${info.scorer}" (judge "${info.judge}")`;
+    super(
+      `${who} errored on every candidate (${info.candidates} of ${info.candidates}) — ` +
+      `the judge is unavailable, not strict: ${distinct.slice(0, 3).join(" | ")}`,
+    );
+    this.name = "JudgeUnavailableError";
+    this.scorer = info.scorer;
+    this.judge = info.judge;
+    this.errors = distinct;
+    this.candidates = info.candidates;
+    this.scorerErrors = info.scorerErrors;
+    this.attempts = info.attempts;
+    this.profile = info.profile;
+  }
+}
+
 /** Expand the configured pipeline into a list of stages, each a list of
  *  provider entries. A `{parallel:[...]}` stage keeps its group; a single
  *  `{provider}` entry becomes a one-element stage. In `pool` mode the whole
@@ -94,12 +143,23 @@ export async function run(
   const mode = config.mode ?? "first-pass";
   const stages = toStages(config);
   const attempts: Attempt[] = [];
+  let scorerErrors = 0;
   let best: { c: Candidate; v: Verdict } | null = null;
+  const stopOnDeadJudge = config.judge.whenUnavailable !== "continue";
 
   const finish = async () => {
-    if (!best) return { ok: false, attempts } as RunResult;
+    if (!best) return { ok: false, attempts, scorerErrors } as RunResult;
     const bytes = best.c.bytes ?? (await download(best.c.url!).then((d) => d.bytes).catch(() => undefined));
-    return { ok: best.v.passes, candidate: best.c, verdict: best.v, bytes, attempts };
+    return { ok: best.v.passes, candidate: best.c, verdict: best.v, bytes, attempts, scorerErrors };
+  };
+
+  /** The judge threw on this candidate. Recorded as an error, never as a verdict. */
+  const errored = (c: Candidate, e: unknown): string => {
+    const message = (e as Error).message;
+    scorerErrors++;
+    attempts.push({ provider: c.provider, score: 0, passes: false, reason: `scorer error: ${message}`, scorerError: message });
+    log(`  ✗ [${c.provider}] scorer error: ${message}`);
+    return message;
   };
 
   for (const entries of stages) {
@@ -131,7 +191,17 @@ export async function run(
       // One look at the whole pool — relative evaluation.
       let pick;
       try { pick = await judge.select(pool, req, judgeCtx); }
-      catch (e) { log(`  judge.select error: ${(e as Error).message}`); pick = undefined; }
+      catch (e) {
+        // One comparative call covers the whole pool, so its failure leaves
+        // every candidate in it unjudged.
+        const errors = pool.map((c) => errored(c, e));
+        if (stopOnDeadJudge) {
+          throw new JudgeUnavailableError({
+            scorer: judge.name, judge: judge.name, errors, candidates: pool.length, scorerErrors, attempts,
+          });
+        }
+        continue;
+      }
       if (pick && pick.index >= 0 && pick.index < pool.length) {
         const c = pool[pick.index];
         attempts.push({
@@ -145,7 +215,7 @@ export async function run(
         if (!best || pick.verdict.score > best.v.score) best = { c, v: pick.verdict };
         if (pick.verdict.passes && mode === "first-pass") {
           const bytes = c.bytes ?? (await download(c.url!)).bytes;
-          return { ok: true, candidate: c, verdict: pick.verdict, bytes, attempts };
+          return { ok: true, candidate: c, verdict: pick.verdict, bytes, attempts, scorerErrors };
         }
       }
       continue;
@@ -153,10 +223,11 @@ export async function run(
 
     // Fallback: evaluate each candidate; comparative = take the max of this pool,
     // first-pass single-provider = stop at the first that passes.
+    const errors: string[] = [];
     for (const c of pool) {
       let v: Verdict;
       try { v = await judge.evaluate(c, req, judgeCtx); }
-      catch (e) { log(`  judge error: ${(e as Error).message}`); continue; }
+      catch (e) { errors.push(errored(c, e)); continue; }
       attempts.push({
         provider: c.provider,
         score: v.score,
@@ -168,8 +239,15 @@ export async function run(
       if (!best || v.score > best.v.score) best = { c, v };
       if (v.passes && mode === "first-pass" && !comparative) {
         const bytes = c.bytes ?? (await download(c.url!)).bytes;
-        return { ok: true, candidate: c, verdict: v, bytes, attempts };
+        return { ok: true, candidate: c, verdict: v, bytes, attempts, scorerErrors };
       }
+    }
+    // Every candidate in this stage errored: the judge is down, and nothing
+    // after this point would be a judgement.
+    if (errors.length === pool.length && stopOnDeadJudge) {
+      throw new JudgeUnavailableError({
+        scorer: judge.name, judge: judge.name, errors, candidates: pool.length, scorerErrors, attempts,
+      });
     }
     // A comparative stage that produced a passing best in first-pass mode: stop.
     if (comparative && mode === "first-pass" && best?.v.passes) return finish();
@@ -230,6 +308,8 @@ export async function runStages(
   const attempts: Attempt[] = [];
   let working: (Candidate & Partial<Scored>)[] = [];
   let best: (Candidate & Scored) | null = null;
+  let scorerErrors = 0;
+  const stopOnDeadJudge = judgeConfig.whenUnavailable !== "continue";
 
   const record = (c: Candidate & Partial<Scored>) =>
     attempts.push({
@@ -237,12 +317,39 @@ export async function runStages(
       reason: c.reason ?? "", confusedWith: c.confusedWith,
     });
 
+  /**
+   * The scorer THREW on this candidate. That is recorded as an error, never as
+   * a verdict: one attempt per error carries `scorerError`, so a caller counts
+   * outages by that field (or by `RunResult.scorerErrors`) rather than by
+   * grepping reasons. The candidate itself is marked only by a score stage —
+   * see `errored` below — because a failed comparative `select` leaves the
+   * verdicts an earlier scorer reached intact.
+   */
+  const noteError = (c: Candidate, e: unknown): string => {
+    const message = (e as Error).message;
+    scorerErrors++;
+    attempts.push({
+      provider: c.provider, score: 0, passes: false,
+      reason: `scorer error: ${message}`, scorerError: message,
+    });
+    log(`  ✗ [${c.provider}] scorer error: ${message}`);
+    return message;
+  };
+  const errored = (c: Candidate & Partial<Scored>, e: unknown): string => {
+    const message = noteError(c, e);
+    // Score 0 and passes false so it can never be chosen; scorerError so no
+    // filter downstream can dress the outage up as a judgement.
+    Object.assign(c, { score: 0, passes: false, reason: `scorer error: ${message}`, scorerError: message });
+    return message;
+  };
+
   const answer = async (c: Candidate & Scored, ok: boolean): Promise<RunResult> => ({
     ok,
     candidate: c,
     verdict: { score: c.score, passes: c.passes, reason: c.reason, confusedWith: c.confusedWith },
     bytes: c.bytes ?? (await download(c.url!)).bytes,
     attempts,
+    scorerErrors,
     profile: profile.name,
   });
 
@@ -259,14 +366,28 @@ export async function runStages(
       const spec = typeof stage.score === "string" ? { scorer: stage.score } : stage.score;
       const scorer = getScorer(spec.scorer);
       if (scorer.usesBytes) working = await freeze(working, attempts, log);
+      const errors: string[] = [];
       for (const c of working) {
         try {
-          Object.assign(c, await scorer.score(c, req, { ...scorerCtx, options: spec }));
+          const verdict = await scorer.score(c, req, { ...scorerCtx, options: spec });
+          // A fresh verdict supersedes an earlier scorer's error on this candidate.
+          delete c.scorerError;
+          Object.assign(c, verdict);
         } catch (e) {
-          Object.assign(c, { score: 0, passes: false, reason: `scorer error: ${(e as Error).message}` });
+          errors.push(errored(c, e));
+          continue;
         }
         log(`  ${c.passes ? "✓" : "·"} [${c.provider}] ${(c.score ?? 0).toFixed(2)} ${c.reason}`);
         if (c.passes && (!best || (c.score ?? 0) > best.score)) best = c as Candidate & Scored;
+      }
+      // Every candidate errored: the judge is down, not strict. Nothing after
+      // this point would be a judgement, and carrying on would bill the next
+      // gather for the same outage.
+      if (working.length && errors.length === working.length && stopOnDeadJudge) {
+        throw new JudgeUnavailableError({
+          scorer: scorer.name, judge: judge.name, errors, candidates: working.length,
+          scorerErrors, attempts, profile: profile.name,
+        });
       }
       continue;
     }
@@ -293,9 +414,11 @@ export async function runStages(
 
     if (isSelect(stage)) {
       if (stage.select === "defer") {
-        working.forEach(record);
+        // Errored candidates are already in the trace, from the moment they
+        // errored; recording them again would double-count scorerError.
+        working.filter((c) => !c.scorerError).forEach(record);
         return {
-          ok: false, attempts, profile: profile.name,
+          ok: false, attempts, scorerErrors, profile: profile.name,
           pool: working.filter((c) => c.score !== undefined) as (Candidate & Scored)[],
         };
       }
@@ -305,7 +428,17 @@ export async function runStages(
         working = await freeze(working, attempts, log);   // the judge must see the images
         let pick;
         try { pick = await judge.select(working, req, judgeCtx); }
-        catch (e) { log(`  judge.select error: ${(e as Error).message}`); }
+        catch (e) {
+          // One comparative call covers the whole pool, so its failure leaves
+          // every candidate in it unjudged.
+          const errors = working.map((c) => noteError(c, e));
+          if (stopOnDeadJudge) {
+            throw new JudgeUnavailableError({
+              scorer: judge.name, judge: judge.name, errors, candidates: working.length,
+              scorerErrors, attempts, profile: profile.name,
+            });
+          }
+        }
         if (pick && pick.index >= 0 && pick.index < working.length) {
           const chosen = Object.assign(working[pick.index], pick.verdict) as Candidate & Scored;
           record(chosen);
@@ -328,5 +461,5 @@ export async function runStages(
   }
 
   if (best) return answer(best, best.passes);
-  return { ok: false, attempts, profile: profile.name };
+  return { ok: false, attempts, scorerErrors, profile: profile.name };
 }

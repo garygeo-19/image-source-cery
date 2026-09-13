@@ -5,7 +5,8 @@
     "model": "gpt-4o-mini",
     "minScore": 0.7,
     "poolMax": 8,
-    "apiKeyEnv": "OPENAI_API_KEY"
+    "apiKeyEnv": "OPENAI_API_KEY",
+    "_whenUnavailable": "Default \"throw\": a score stage on which EVERY candidate errored (429, expired key, exhausted balance) raises JudgeUnavailableError instead of storing the outage as verdicts. Set \"continue\" to record the errors and carry on."
   },
   "profiles": {
     "my-pack": {

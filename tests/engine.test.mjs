@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { JUDGES, REGISTRY, run } from "../dist/index.js";
+import { JUDGES, JudgeUnavailableError, REGISTRY, run } from "../dist/index.js";
 
 test("best mode evaluates every candidate absolutely and preserves confusedWith", async () => {
   const providerA = "test-best-a";
@@ -172,5 +172,176 @@ test("judged remote bytes are frozen once and provider failures remain attempts"
     delete REGISTRY[brokenProvider];
     delete REGISTRY[changingProvider];
     delete JUDGES[judgeName];
+  }
+});
+
+// ── A dead judge is not a strict one ────────────────────────────────────────
+// A 429, an expired key, an exhausted balance: the scorer throws on every
+// candidate, each scores 0, and a run that carried on would report "no
+// acceptable image" for a subject nobody looked at. The engine stops instead.
+
+const png = Buffer.from("89504e470d0a1a0a", "hex");
+function fixtureProvider(name, titles, onProvide = () => {}) {
+  REGISTRY[name] = {
+    name, kind: "search", corpus: "archive",
+    configured: () => true,
+    provide: async () => { onProvide(); return titles.map((title) => ({ provider: name, title, bytes: png, mime: "image/png" })); },
+  };
+  return { provider: name };
+}
+function throwingJudge(name, shouldThrow = () => true) {
+  JUDGES[name] = {
+    name,
+    configured: () => true,
+    evaluate: async (c) => {
+      if (shouldThrow(c)) throw new Error("judge OpenAI 429: insufficient_quota");
+      return { score: 0.9, passes: true, reason: "fine" };
+    },
+  };
+}
+
+test("a score stage on which every candidate errors throws JudgeUnavailableError before the next gather", async () => {
+  const judgeName = "dead-judge-staged";
+  throwingJudge(judgeName);
+  let secondGathers = 0;
+  const first = fixtureProvider("dead-first", ["a", "b", "c"]);
+  const second = fixtureProvider("dead-second", ["d"], () => { secondGathers += 1; });
+
+  try {
+    await assert.rejects(
+      () => run({ query: "x" }, {
+        judge: { provider: judgeName },
+        stages: [
+          { gather: [first] }, { score: "judge" }, { filter: "min-score" }, { select: "best" },
+          { gather: [second] }, { score: "judge" }, { select: "best" },
+        ],
+      }, {}),
+      (e) => {
+        assert.ok(e instanceof JudgeUnavailableError, `expected JudgeUnavailableError, got ${e?.name}: ${e?.message}`);
+        assert.equal(e.name, "JudgeUnavailableError");
+        assert.equal(e.scorer, "judge");
+        assert.equal(e.judge, judgeName);
+        assert.equal(e.candidates, 3);
+        assert.equal(e.scorerErrors, 3);
+        assert.deepEqual(e.errors, ["judge OpenAI 429: insufficient_quota"]);
+        assert.equal(e.profile, "inline");
+        assert.match(e.message, /unavailable, not strict/);
+        assert.match(e.message, /insufficient_quota/);
+        // The trace up to the failure rides along, one flagged entry per error.
+        assert.equal(e.attempts.filter((a) => a.scorerError).length, 3);
+        return true;
+      },
+    );
+    assert.equal(secondGathers, 0, "a dead judge must not bill the next gather");
+  } finally {
+    delete JUDGES[judgeName];
+    delete REGISTRY["dead-first"];
+    delete REGISTRY["dead-second"];
+  }
+});
+
+test("it does not fire when only some candidates error", async () => {
+  const judgeName = "half-dead-judge";
+  throwingJudge(judgeName, (c) => c.title === "b");
+  const p = fixtureProvider("half-dead", ["a", "b"]);
+  try {
+    const result = await run({ query: "x" }, {
+      judge: { provider: judgeName },
+      stages: [{ gather: [p] }, { score: "judge" }, { filter: "min-score" }, { select: "best" }],
+    }, {});
+    assert.equal(result.ok, true);
+    assert.equal(result.candidate.title, "a");
+    assert.equal(result.scorerErrors, 1);
+    assert.equal(result.attempts.filter((a) => a.scorerError).length, result.scorerErrors);
+  } finally {
+    delete JUDGES[judgeName];
+    delete REGISTRY["half-dead"];
+  }
+});
+
+test("whenUnavailable: continue records the outage and carries on", async () => {
+  const judgeName = "dead-judge-continue";
+  throwingJudge(judgeName);
+  const p = fixtureProvider("dead-continue", ["a", "b"]);
+  try {
+    const result = await run({ query: "x" }, {
+      judge: { provider: judgeName, whenUnavailable: "continue" },
+      stages: [{ gather: [p] }, { score: "judge" }, { filter: "min-score" }, { select: "best" }],
+    }, {});
+    assert.equal(result.ok, false);
+    assert.equal(result.scorerErrors, 2);
+    assert.equal(result.attempts.filter((a) => a.scorerError).length, 2);
+    // Every stored reason says what happened; none says "scored 0.00".
+    assert.ok(result.attempts.filter((a) => /scorer error/.test(a.reason)).length >= 2);
+    assert.ok(!result.attempts.some((a) => /scored 0\.00/.test(a.reason)));
+  } finally {
+    delete JUDGES[judgeName];
+    delete REGISTRY["dead-continue"];
+  }
+});
+
+test("a deferred pool still reports scorer errors, once each", async () => {
+  const judgeName = "dead-judge-defer";
+  throwingJudge(judgeName, (c) => c.title === "b");
+  const p = fixtureProvider("dead-defer", ["a", "b"]);
+  try {
+    const result = await run({ query: "x" }, {
+      judge: { provider: judgeName },
+      stages: [{ gather: [p] }, { score: "judge" }, { select: "defer" }],
+    }, {});
+    assert.equal(result.scorerErrors, 1);
+    assert.equal(result.attempts.filter((a) => a.scorerError).length, 1);
+    assert.equal(result.pool.find((c) => c.title === "b").scorerError, "judge OpenAI 429: insufficient_quota");
+    assert.equal(result.pool.find((c) => c.title === "a").scorerError, undefined);
+  } finally {
+    delete JUDGES[judgeName];
+    delete REGISTRY["dead-defer"];
+  }
+});
+
+test("a comparative select that throws is the same outage for the whole pool", async () => {
+  const judgeName = "dead-judge-compare";
+  JUDGES[judgeName] = {
+    name: judgeName,
+    configured: () => true,
+    evaluate: async () => { throw new Error("must not run"); },
+    select: async () => { throw new Error("judge OpenAI 401: invalid_api_key"); },
+  };
+  const p = fixtureProvider("dead-compare", ["a", "b"]);
+  try {
+    await assert.rejects(
+      () => run({ query: "x" }, {
+        judge: { provider: judgeName },
+        stages: [{ gather: [p] }, { select: "compare" }],
+      }, {}),
+      (e) => e instanceof JudgeUnavailableError && e.candidates === 2 && /invalid_api_key/.test(e.message),
+    );
+  } finally {
+    delete JUDGES[judgeName];
+    delete REGISTRY["dead-compare"];
+  }
+});
+
+test("the legacy pipeline path stops on a dead judge too, and survives a partial one", async () => {
+  const dead = "legacy-dead-judge";
+  const partial = "legacy-partial-judge";
+  throwingJudge(dead);
+  throwingJudge(partial, (c) => c.title === "b");
+  const p = fixtureProvider("legacy-outage", ["a", "b"]);
+  try {
+    await assert.rejects(
+      () => run({ query: "x" }, { judge: { provider: dead }, mode: "best", pipeline: [p] }, {}),
+      (e) => e instanceof JudgeUnavailableError && e.judge === dead && e.candidates === 2,
+    );
+    const result = await run({ query: "x" }, { judge: { provider: partial }, mode: "best", pipeline: [p] }, {});
+    assert.equal(result.ok, true);
+    assert.equal(result.scorerErrors, 1);
+    const flagged = result.attempts.filter((a) => a.scorerError);
+    assert.equal(flagged.length, 1);
+    assert.match(flagged[0].reason, /^scorer error: judge OpenAI 429/);
+  } finally {
+    delete JUDGES[dead];
+    delete JUDGES[partial];
+    delete REGISTRY["legacy-outage"];
   }
 });

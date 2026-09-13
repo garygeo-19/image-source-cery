@@ -203,6 +203,24 @@ scores mid-range rather than at zero — whether that clears the bar is your cal
 library's. A *different named* building is not imprecise, it is false, and scores at the
 floor.
 
+### A dead judge is not a strict one
+
+A scorer that **throws** — a 429, an expired key, an exhausted balance — is recorded as
+an error, never as a verdict. The candidate scores 0 and cannot be chosen, but its
+attempt carries `scorerError`, and `min-score` / `passing` pass that error text through
+unchanged (`min-score: scorer error: judge OpenAI 429 …`) instead of composing
+`scored 0.00 < 0.7` over it, so a stored trace can tell an outage from a run that
+genuinely found nothing good. `RunResult.scorerErrors` counts them; exactly one attempt
+per error carries the field, so the two agree.
+
+A score stage on which **every** candidate errored throws `JudgeUnavailableError`
+(with `.errors`, `.candidates`, `.attempts`) before the next gather is billed — a judge
+that errors on all of them is down, not picky. To record and carry on instead:
+
+```jsonc
+"judge": { "provider": "openai", "whenUnavailable": "continue" }
+```
+
 ### Declaring the subject
 
 `ImageRequest.subjectType` is optional and never inferred — a library whose value is a

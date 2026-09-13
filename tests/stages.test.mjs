@@ -286,6 +286,59 @@ test("an unjudged candidate is unaffected by whenUnique", () => {
   assert.equal(reject({ score: 0.6, passes: true, reason: "" }, { min: 0.5, whenUnique: 0.8 }), null);
 });
 
+// ── scorer errors are not verdicts ──────────────────────────────────────────
+// A scorer that threw left score 0 behind. "scored 0.00 < 0.7" is a sentence
+// about the picture, and nothing looked at the picture: a 429 or an expired key
+// must survive into the stored trace as what it was.
+test("min-score and passing pass a scorer error through instead of composing a verdict over it", () => {
+  const errored = { score: 0, passes: false, reason: "scorer error: judge OpenAI 429: rate limited", scorerError: "judge OpenAI 429: rate limited" };
+  assert.equal(reject(errored, { min: 0.7 }), "scorer error: judge OpenAI 429: rate limited");
+  assert.equal(reject({ ...errored, subjectIsUnique: true }, { min: 0.5, whenUnique: 0.8 }),
+    "scorer error: judge OpenAI 429: rate limited");
+  assert.equal(FILTERS.passing.reject({ provider: "fixture", ...errored }, {}, ctx, {}),
+    "scorer error: judge OpenAI 429: rate limited");
+
+  // A genuine 0 from a scorer that ran is still judged as a score.
+  assert.match(reject({ score: 0, passes: false, reason: "wrong subject" }, { min: 0.7 }) ?? "", /scored 0\.00 < 0\.7/);
+});
+
+test("a throwing scorer leaves 'scorer error' in the stored reason after min-score", async () => {
+  const judgeName = "stages-partial-outage";
+  JUDGES[judgeName] = {
+    name: judgeName,
+    configured: () => true,
+    evaluate: async (c) => {
+      if (c.title === "second") throw new Error("judge OpenAI 429: insufficient_quota");
+      return { score: 0.9, passes: true, reason: "fine" };
+    },
+  };
+  const p = fixtureProvider("outage-src", [{ title: "first" }, { title: "second" }]);
+  try {
+    const result = await run({ query: "x" }, {
+      judge: { provider: judgeName },
+      stages: [{ gather: [p] }, { score: "judge" }, { filter: "min-score" }, { select: "best" }],
+    }, {});
+
+    // Only one candidate errored, so the judge is not dead and the run completes.
+    assert.equal(result.ok, true);
+    assert.equal(result.candidate.title, "first");
+    assert.equal(result.scorerErrors, 1);
+
+    // The error is recorded as an error, with the dedicated field…
+    const flagged = result.attempts.filter((a) => a.scorerError);
+    assert.equal(flagged.length, 1);
+    assert.equal(flagged[0].scorerError, "judge OpenAI 429: insufficient_quota");
+    assert.match(flagged[0].reason, /^scorer error: /);
+
+    // …and the filter's drop entry keeps that text instead of "scored 0.00 < 0.7".
+    const dropped = result.attempts.find((a) => a.reason.startsWith("min-score:"));
+    assert.equal(dropped.reason, "min-score: scorer error: judge OpenAI 429: insufficient_quota");
+    assert.ok(!result.attempts.some((a) => /scored 0\.00/.test(a.reason)), "the outage must not be stored as a verdict");
+  } finally {
+    delete JUDGES[judgeName];
+  }
+});
+
 test("stock-safe screens competing names before it spends a judge call", () => {
   const stages = BUILT_IN_PROFILES["stock-safe"].stages;
   const screened = stages.findIndex((s) => s.filter === "no-other-name");

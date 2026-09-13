@@ -43,6 +43,11 @@ const CAPABILITIES = {
     // Loosely related is acceptable; a competing named subject is not.
     "filter.noOtherName": true,
     "request.subjectType": true,
+    // A scorer that threw is recorded as an error (Attempt.scorerError,
+    // RunResult.scorerErrors), never dressed up as a verdict by a later filter;
+    // a stage on which every candidate errored throws JudgeUnavailableError.
+    "attempts.scorerError": true,
+    "judge.unavailableThrows": true,
   },
 };
 

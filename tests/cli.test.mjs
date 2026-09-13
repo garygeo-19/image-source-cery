@@ -44,6 +44,8 @@ test("capabilities reports the safe engine semantics and package version", () =>
         "judge.uniqueness": true,
         "filter.noOtherName": true,
         "request.subjectType": true,
+        "attempts.scorerError": true,
+        "judge.unavailableThrows": true,
       },
     });
   } finally {
