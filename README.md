@@ -122,7 +122,8 @@ Put keys in your shell env or a local `.env` (gitignored). Nothing is bundled.
 | `pexels` | `PEXELS_API_KEY` | modern stock photography & video stills |
 | `generate` | `OPENAI_API_KEY` | anything nothing else has (gpt-image-1) |
 
-Judges: `openai` (vision), `human` (interactive), `none` (accept first).
+Judges: `openai` (vision), `human` (interactive), `none` (accept first), `agent` (deferred —
+see [Judging with an agent](#judging-with-an-agent)).
 
 ### Profiles — saved paths
 
@@ -156,6 +157,7 @@ cascade: try the precise source, fall through only if nothing was chosen.
       "description": "Archives, name-checked, no LLM.",
       "stages": [
         { "gather": [{ "provider": "wikipedia" }, { "provider": "loc" }] },
+        { "filter": "usable-license" },   // drop NC/ND before anything scores
         { "score": "title-adjacency" },   // deterministic identity check
         { "filter": "passing" },
         { "select": "best" }
@@ -166,7 +168,8 @@ cascade: try the precise source, fall through only if nothing was chosen.
 ```
 
 Scorers: `title-adjacency` (deterministic, metadata-only), `judge` (vision), `none`.
-Filters: `min-score`, `passing`, `has-title`, `archive-only`, `no-other-name`, `no-synthetic`.
+Filters: `min-score`, `passing`, `has-title`, `archive-only`, `no-other-name`, `no-synthetic`,
+`usable-license`.
 Selects: `first`, `best`, `compare`, `defer`.
 
 ### Loosely related is acceptable; wrong identity is not
@@ -183,6 +186,35 @@ check either useless or crippling:
 is the permissive one: allow anything that names nothing, reject anything that names a
 competitor. Use the first against archives, the second when a named subject has fallen
 through to stock.
+
+### NonCommercial and NoDerivatives are refused by default
+
+Two Creative Commons clauses are incompatible with how most consumers of a sourced image
+behave, and every built-in profile drops them straight after its gather, before anything
+scores — a candidate that can never be used must never cost a judge call:
+
+- **ND (NoDerivatives)** — resizing or re-encoding the image is a derivative work. If your
+  pipeline touches the bytes at all, you are already breaking it.
+- **NC (NonCommercial)** — a bet on the business model. Any paid tier, ad or sponsorship
+  makes every NC image a breach, retroactively, across every build that shipped it.
+
+The `usable-license` filter reads **every** token of the licence string, because the two
+formats in the wild disagree: Openverse reports `by-nc-sa 4.0`, Wikimedia reports
+`CC BY-NC-ND 2.0`, and a first-token check passes the second one as `cc`. It matches
+licence **codes** only, never attribution names — `Photo by ND Smith` and
+`Ndlovu · CC BY 4.0` pass; `CC BY-NC-ND 2.0`, `by-nc-sa 4.0`,
+`Attribution-NonCommercial 4.0` and a bare `nc` do not. An empty or unrecognised licence
+passes: the filter rejects the two clauses it knows cannot be honoured, it does not
+adjudicate every licence in the world.
+
+If you *can* honour a clause, say so per profile:
+
+```jsonc
+{ "filter": { "filter": "usable-license", "allowNonCommercial": true } }   // or allowNoDerivatives
+```
+
+`unusableLicense(license)` — `"nc" | "nd" | null` — is exported so a serving-side gate can
+share the exact same rule.
 
 ### Uniqueness
 
@@ -203,6 +235,24 @@ scores mid-range rather than at zero — whether that clears the bar is your cal
 library's. A *different named* building is not imprecise, it is false, and scores at the
 floor.
 
+### A dead judge is not a strict one
+
+A scorer that **throws** — a 429, an expired key, an exhausted balance — is recorded as
+an error, never as a verdict. The candidate scores 0 and cannot be chosen, but its
+attempt carries `scorerError`, and `min-score` / `passing` pass that error text through
+unchanged (`min-score: scorer error: judge OpenAI 429 …`) instead of composing
+`scored 0.00 < 0.7` over it, so a stored trace can tell an outage from a run that
+genuinely found nothing good. `RunResult.scorerErrors` counts them; exactly one attempt
+per error carries the field, so the two agree.
+
+A score stage on which **every** candidate errored throws `JudgeUnavailableError`
+(with `.errors`, `.candidates`, `.attempts`) before the next gather is billed — a judge
+that errors on all of them is down, not picky. To record and carry on instead:
+
+```jsonc
+"judge": { "provider": "openai", "whenUnavailable": "continue" }
+```
+
 ### Declaring the subject
 
 `ImageRequest.subjectType` is optional and never inferred — a library whose value is a
@@ -221,6 +271,26 @@ already holds the surrounding context can decide with the evidence in hand.
 
 `title-adjacency` needs only metadata, so bytes are fetched lazily — candidates are
 downloaded once something actually has to look at the picture, not before.
+
+### Judging with an agent
+
+When the caller *is* the judge — Claude Code, Cursor, any model that can view the pool —
+say so:
+
+```jsonc
+{ "judge": { "provider": "agent" }, "profile": "agent" }
+```
+
+The `agent` judge never scores in-process. A profile that ends in `select: "defer"` (the
+built-in `agent` profile does) gathers, runs the licence gate and the deterministic name
+check, and hands the scored pool back; you view the images and choose. Any config that
+would ask it to score synchronously — `score: "judge"`, `select: "compare"`, or the
+legacy `pipeline` form — is refused **before a single provider is called**, so a stray
+stage can never fall through to a paid vision API. `imgsrcy doctor` reports it as
+`deferred (external agent)`.
+
+Previously the only way to get that guarantee was to point `judge.provider` at a name
+that did not exist. Now the arrangement has one.
 
 ### Tuning
 

@@ -5,8 +5,10 @@
     "model": "gpt-4o-mini",
     "minScore": 0.7,
     "poolMax": 8,
-    "apiKeyEnv": "OPENAI_API_KEY"
+    "apiKeyEnv": "OPENAI_API_KEY",
+    "_whenUnavailable": "Default \"throw\": a score stage on which EVERY candidate errored (429, expired key, exhausted balance) raises JudgeUnavailableError instead of storing the outage as verdicts. Set \"continue\" to record the errors and carry on."
   },
+  "_agent": "Judging with an external agent (Claude Code, Cursor)? Set \"provider\": \"agent\" above and run a profile that ends in select \"defer\" (the built-in \"agent\" profile does). The library gathers, gates licences, name-checks, and hands back the pool; any in-process scoring stage is refused before a provider is called, so nothing can fall through to a paid API.",
   "profiles": {
     "my-pack": {
       "description": "Archives, name-checked, no model calls. Good for named subjects.",
@@ -21,6 +23,14 @@
             },
             {
               "provider": "loc"
+            }
+          ]
+        },
+        {
+          "_comment": "Drop NC/ND before anything scores (every built-in profile does). Add \"allowNonCommercial\": true or \"allowNoDerivatives\": true to the filter object if you can honour that clause.",
+          "filter": [
+            {
+              "filter": "usable-license"
             }
           ]
         },
@@ -44,6 +54,9 @@
               "provider": "openverse"
             }
           ]
+        },
+        {
+          "filter": "usable-license"
         },
         {
           "score": "title-adjacency"

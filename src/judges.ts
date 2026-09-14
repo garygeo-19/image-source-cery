@@ -211,7 +211,35 @@ export const human: Judge = {
   },
 };
 
-export const JUDGES: Record<string, Judge> = { none, openai, human };
+// ── agent — judging is deferred to an external agent; never called in-process ──
+/**
+ * A judge that DOES NOT SCORE. An agent invoking this library already holds
+ * the surrounding context and can view the images, so it is better informed
+ * than any judge inside here: the pool is handed back via `select: "defer"`
+ * (the `agent` profile does exactly this) and judged out of process.
+ *
+ * Naming the arrangement in config is the point. Before this existed, a
+ * consumer judging with an external agent had to point `judge.provider` at a
+ * name that did not exist, just so that any synchronous scoring path would
+ * fail loudly instead of billing a vision API it never meant to use. Now the
+ * config says what happens, `doctor` reports it as deferred, and the engine
+ * refuses a scoring stage BEFORE any provider is called.
+ */
+export const AGENT_JUDGE_REFUSAL =
+  `judge "agent" cannot be called synchronously: judging is deferred to an external agent. ` +
+  `Use \`select: "defer"\` (or the built-in "agent" profile) and judge the gathered pool out of process.`;
+
+export const agent: Judge = {
+  name: "agent",
+  deferred: true,
+  configured: () => true,
+  async evaluate() { throw new Error(AGENT_JUDGE_REFUSAL); },
+  // Present so that a comparative path cannot quietly fall back to "rank by
+  // score" when it finds no select — the refusal is the whole behaviour.
+  async select() { throw new Error(AGENT_JUDGE_REFUSAL); },
+};
+
+export const JUDGES: Record<string, Judge> = { none, openai, human, agent };
 
 export function getJudge(name: string): Judge {
   const j = JUDGES[name];

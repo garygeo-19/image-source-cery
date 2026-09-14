@@ -99,6 +99,14 @@ export interface Verdict {
 
 export interface Judge {
   name: string;
+  /**
+   * This judge never scores IN-PROCESS: judging happens out of process, on the
+   * pool that `select: "defer"` hands back. The engine refuses to run a
+   * scoring stage (`score: "judge"`, `select: "compare"`, or the legacy
+   * pipeline) with such a judge, before any provider is called, so a config
+   * that names it can never fall through to a paid API by accident.
+   */
+  deferred?: boolean;
   configured(ctx: Ctx): true | string;
   /** Absolute, per-candidate verdict (sequential / first-pass path). */
   evaluate(candidate: Candidate, req: ImageRequest, ctx: Ctx): Promise<Verdict>;
@@ -125,6 +133,14 @@ export interface Scored {
   confusedWith?: string;
   /** Carried through from the judge — see Verdict.subjectIsUnique. */
   subjectIsUnique?: boolean;
+  /**
+   * Set when the scorer THREW instead of judging — a 429, an expired key, an
+   * exhausted balance. `score` is 0 and `passes` is false so the candidate
+   * cannot be chosen, but this is not a verdict about the picture and must
+   * never be read as one: nothing looked at it. Filters that see this field
+   * pass `reason` through unchanged rather than composing a new one over it.
+   */
+  scorerError?: string;
 }
 
 export type FilterSpec = string | { filter: string; [option: string]: any };
@@ -180,6 +196,14 @@ export function isParallel(s: PipelineStage): s is ParallelStage {
 }
 export interface JudgeConfig {
   provider: string;
+  /**
+   * What to do when a score stage errors on EVERY candidate it was given. A
+   * judge that throws on all of them is dead, not strict — an outage, not a
+   * verdict — so the default, "throw", raises JudgeUnavailableError and stops
+   * the run. "continue" records the errors (see Attempt.scorerError and
+   * RunResult.scorerErrors) and carries on as if the stage found nothing.
+   */
+  whenUnavailable?: "throw" | "continue";
   [option: string]: any;
 }
 export interface Config {
@@ -214,6 +238,16 @@ export interface Attempt {
   passes?: boolean;
   reason: string;
   confusedWith?: string;
+  /**
+   * The scorer threw on this candidate; `reason` is the error, not a verdict.
+   * Exactly one attempt per scorer error carries this field — the entry made
+   * at the moment it threw — so `attempts.filter((a) => a.scorerError).length`
+   * equals `RunResult.scorerErrors`. A later filter that drops the same
+   * candidate records its own entry, whose reason passes the error text
+   * through unchanged (`min-score: scorer error: …`) but does not carry the
+   * field. See Scored.scorerError.
+   */
+  scorerError?: string;
 }
 export interface RunResult {
   ok: boolean;
@@ -221,6 +255,13 @@ export interface RunResult {
   verdict?: Verdict;
   bytes?: Buffer;
   attempts: Attempt[];
+  /**
+   * How many candidates a scorer failed to judge (threw) during this run —
+   * candidates, not calls: a comparative `select` that throws over a pool of
+   * five counts five. Zero on a healthy run. A caller that wants to stop after
+   * "a couple of credit errors" reads this instead of scanning reasons.
+   */
+  scorerErrors: number;
   /** Set when the pipeline ended in `select: "defer"`: the scored pool, handed
    *  back for the caller to judge. `ok` is false because nothing was chosen. */
   pool?: (Candidate & Scored)[];

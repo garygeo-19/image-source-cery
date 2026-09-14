@@ -232,6 +232,71 @@ export const SCORERS: Record<string, Scorer> = {
   none: noneScorer,
 };
 
+// ── Licence clauses ─────────────────────────────────────────────────────────
+
+/**
+ * The Creative Commons clause vocabulary, plus the spelled-out names Wellcome
+ * and a few archives use ("Attribution-NonCommercial-NoDerivatives 4.0"). A
+ * token counts as a licence CODE only if EVERY hyphen-separated part is in
+ * here — that is what keeps attribution names out of it.
+ */
+const CC_CLAUSE = new Map(Object.entries({
+  cc: "cc", cc0: "cc0", zero: "cc0", pdm: "pdm", publicdomain: "pdm",
+  by: "by", attribution: "by",
+  sa: "sa", sharealike: "sa",
+  nc: "nc", noncommercial: "nc",
+  nd: "nd", noderivatives: "nd", noderivs: "nd",
+}));
+const SAYS_CC = /\b(cc|creative\s+commons)\b/i;
+
+/**
+ * NonCommercial and NoDerivatives, read off a licence or credit string.
+ * Returns "nd" | "nc" | null. Null means "no NC/ND clause found", NOT
+ * "verified usable" — this adjudicates the two clauses a re-encoding,
+ * possibly-monetised consumer cannot honour, and nothing else.
+ *
+ * TWO TRAPS, BOTH OF WHICH BIT A CONSUMER BEFORE THIS WAS UPSTREAMED.
+ *
+ * 1. READ EVERY TOKEN, NOT THE FIRST. Openverse reports `"by-nc-sa 4.0"`,
+ *    which a first-token check reads correctly. Wikimedia hands back
+ *    `extmetadata.LicenseShortName`, which is `"CC BY-NC-ND 2.0"` — first
+ *    token `cc`, no clause, allowed. That check covered the stock sources and
+ *    silently passed every NC/ND file from the archives, which is the corpus a
+ *    named subject is sent to first. 143 NC and 82 ND images reached a
+ *    production catalogue that way. So every token is scanned and asked
+ *    whether it is a licence code.
+ *
+ * 2. A BARE `nc` OR `nd` IN PROSE IS NOT A CLAUSE. "Photo by ND Smith" and
+ *    "Nic Coury, Raleigh NC" are attributions, not licences, and refusing them
+ *    strips a usable image AND the attribution CC BY requires. A single bare
+ *    code counts only when it IS the whole field (`license: "ND"`) or the
+ *    string names CC somewhere. Hyphenated forms are unambiguous and need no
+ *    guard — and "Ndlovu" is a single part that is not a clause word, so the
+ *    token is never read as a code at all.
+ */
+export function unusableLicense(license: unknown): "nc" | "nd" | null {
+  const clauses = licenseClauses(license);
+  if (clauses.has("nd")) return "nd";
+  if (clauses.has("nc")) return "nc";
+  return null;
+}
+
+/** Every CC clause the string names, as normalised codes ("by", "nc", "nd", …). */
+export function licenseClauses(license: unknown): Set<string> {
+  const raw = String(license ?? "").trim();
+  const clauses = new Set<string>();
+  if (!raw) return clauses;
+  const licensey = SAYS_CC.test(raw);
+  const tokens = raw.toLowerCase().split(/\s+/);
+  for (const token of tokens) {
+    const parts = token.replace(/^[(<[]+|[),.;·>\]]+$/g, "").split("-");
+    if (!parts.every((p) => CC_CLAUSE.has(p))) continue;
+    if (parts.length === 1 && !licensey && tokens.length > 1) continue;
+    for (const p of parts) clauses.add(CC_CLAUSE.get(p)!);
+  }
+  return clauses;
+}
+
 // ── Filters: drop candidates before anything expensive looks at them ─────────
 
 export interface Filter {
@@ -253,6 +318,11 @@ export const FILTERS: Record<string, Filter> = {
   "min-score": {
     name: "min-score",
     reject: (c, req, _ctx, options) => {
+      // A scorer that threw left score 0 behind, and "scored 0.00 < 0.7" is a
+      // sentence about the picture. It is not: nothing looked at it. Returning
+      // the error as the reason is what lets a stored trace tell an outage
+      // apart from a run that genuinely found nothing good.
+      if (c.scorerError) return c.reason || `scorer error: ${c.scorerError}`;
       const base = options?.min ?? req.minScore ?? 0.7;
       const floor = c.subjectIsUnique && options?.whenUnique !== undefined
         ? options.whenUnique
@@ -264,7 +334,10 @@ export const FILTERS: Record<string, Filter> = {
   },
   passing: {
     name: "passing",
-    reject: (c) => (c.passes ? null : c.reason || "did not pass"),
+    reject: (c) => {
+      if (c.scorerError) return c.reason || `scorer error: ${c.scorerError}`;
+      return c.passes ? null : c.reason || "did not pass";
+    },
   },
   "has-title": {
     name: "has-title",
@@ -312,6 +385,44 @@ export const FILTERS: Record<string, Filter> = {
     name: "no-synthetic",
     reject: (c, _req, ctx) =>
       ctx.corpusOf(c.provider) === "synthetic" ? "generated images are not allowed here" : null,
+  },
+  /**
+   * usable-license — reject NonCommercial and NoDerivatives candidates.
+   *
+   * Two Creative Commons clauses are incompatible with how most consumers of a
+   * sourced image behave. ND is the sharper one: a pipeline that resizes or
+   * re-encodes has made a derivative, today, whatever the product is. NC is a
+   * bet on the business model — any paid tier, ad or sponsorship makes every NC
+   * image a breach, retroactively, across every build that shipped it. Both are
+   * cheap to refuse at selection time and expensive to unwind once the bytes
+   * are cached, referenced by a manifest and served from a CDN.
+   *
+   * Every built-in profile runs this before its first score stage, so a
+   * candidate that can never be used never costs a judge call. Matching is on
+   * the licence CODE only — see unusableLicense — never the attribution string,
+   * so a photographer whose name contains "nd" cannot trip it. Anything
+   * unrecognised is ALLOWED: this rejects the two clauses we know cannot be
+   * honoured, it does not adjudicate every licence in the world, and a false
+   * reject here is a silently thinner result.
+   *
+   * Options: `allowNonCommercial: true` and `allowNoDerivatives: true` let a
+   * consumer that can honour a clause keep those candidates.
+   */
+  "usable-license": {
+    name: "usable-license",
+    reject: (c, _req, _ctx, options) => {
+      const raw = String(c.license ?? "").trim();
+      if (!raw) return null;                         // nothing claimed — let it through
+      const clauses = licenseClauses(raw);
+      // ND first: it is the clause a re-encoding pipeline is already breaking.
+      if (clauses.has("nd") && !options?.allowNoDerivatives) {
+        return `NoDerivatives licence (${raw}) — resizing or re-encoding it makes a derivative`;
+      }
+      if (clauses.has("nc") && !options?.allowNonCommercial) {
+        return `NonCommercial licence (${raw}) — unusable the moment anything is monetised`;
+      }
+      return null;
+    },
   },
 };
 

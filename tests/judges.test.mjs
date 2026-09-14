@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { JUDGES } from "../dist/index.js";
+import { BUILT_IN_PROFILES, JUDGES, REGISTRY, getJudge, run } from "../dist/index.js";
 
 const ctx = (options = {}) => ({ env: { OPENAI_API_KEY: "sk-test" }, options, log: () => {} });
 const png = Buffer.from("89504e470d0a1a0a", "hex");
@@ -162,4 +162,85 @@ test("the comparative path carries the same rubric", async () => {
     ),
   );
   assert.match(promptText(sent), /UNIQUE/);
+});
+
+// ── agent — deferred, never synchronous ─────────────────────────────────────
+// A consumer that judges with an external agent used to point `judge.provider`
+// at a NONEXISTENT name, just so any in-process scoring path would fail loudly
+// instead of billing OpenAI. The arrangement now has a name.
+test("agent is a valid judge that refuses to score synchronously", async () => {
+  const judge = getJudge("agent");
+  assert.equal(judge.name, "agent");
+  assert.equal(judge.deferred, true);
+  assert.equal(judge.configured(ctx()), true, "naming it is valid config, not a misconfiguration");
+  await assert.rejects(
+    () => judge.evaluate(candidate("wikipedia", "Herb Brooks"), { query: "Herb Brooks" }, ctx()),
+    /deferred to an external agent.*select: "defer"/s,
+  );
+  await assert.rejects(
+    () => judge.select([candidate("wikipedia", "Herb Brooks")], { query: "Herb Brooks" }, ctx()),
+    /deferred to an external agent/,
+  );
+});
+
+function countingProvider(name) {
+  let calls = 0;
+  REGISTRY[name] = {
+    name, kind: "search", corpus: "archive",
+    configured: () => true,
+    provide: async () => { calls += 1; return [{ provider: name, title: "anything", bytes: png, mime: "image/png" }]; },
+  };
+  return { entry: { provider: name }, calls: () => calls };
+}
+
+test("a scoring stage with the agent judge fails before any provider is called", async () => {
+  const p = countingProvider("agent-refuse-staged");
+  const legacy = countingProvider("agent-refuse-legacy");
+  try {
+    await assert.rejects(
+      () => run({ query: "x" }, {
+        judge: { provider: "agent" },
+        stages: [{ gather: [p.entry] }, { score: "judge" }, { select: "best" }],
+      }, {}),
+      /judge "agent" is deferred.*select: "defer"/s,
+    );
+    await assert.rejects(
+      () => run({ query: "x" }, {
+        judge: { provider: "agent" },
+        stages: [{ gather: [p.entry] }, { select: "compare" }],
+      }, {}),
+      /judge "agent" is deferred/,
+    );
+    // The legacy pipeline form always judges in-process.
+    await assert.rejects(
+      () => run({ query: "x" }, { judge: { provider: "agent" }, pipeline: [legacy.entry] }, {}),
+      /judge "agent" is deferred/,
+    );
+    assert.equal(p.calls(), 0, "no provider may be billed on the way to refusing");
+    assert.equal(legacy.calls(), 0);
+  } finally {
+    delete REGISTRY["agent-refuse-staged"];
+    delete REGISTRY["agent-refuse-legacy"];
+  }
+});
+
+test("the agent judge runs a deferred pipeline without ever being asked to score", async () => {
+  const p = countingProvider("agent-defer-src");
+  try {
+    const result = await run({ query: "x" }, {
+      judge: { provider: "agent" },
+      stages: [{ gather: [p.entry] }, { filter: "usable-license" }, { score: "title-adjacency" }, { select: "defer" }],
+    }, {});
+    assert.equal(result.ok, false, "deferring is not a success — nothing was chosen");
+    assert.equal(result.pool.length, 1);
+    assert.equal(p.calls(), 1);
+  } finally {
+    delete REGISTRY["agent-defer-src"];
+  }
+});
+
+test("the built-in agent profile names the agent judge and defers", () => {
+  assert.equal(BUILT_IN_PROFILES.agent.judge.provider, "agent");
+  assert.ok(BUILT_IN_PROFILES.agent.stages.some((s) => s.select === "defer"));
+  assert.ok(!BUILT_IN_PROFILES.agent.stages.some((s) => s.score === "judge" || s.select === "compare"));
 });

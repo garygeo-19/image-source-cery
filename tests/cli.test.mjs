@@ -44,6 +44,10 @@ test("capabilities reports the safe engine semantics and package version", () =>
         "judge.uniqueness": true,
         "filter.noOtherName": true,
         "request.subjectType": true,
+        "attempts.scorerError": true,
+        "judge.unavailableThrows": true,
+        "filter.usableLicense": true,
+        "judge.agent": true,
       },
     });
   } finally {
@@ -67,6 +71,27 @@ test("doctor expands parallel stages", () => {
     assert.equal(completed.status, 0, completed.stderr);
     assert.match(completed.stdout, /wikimedia\s+✓ ready/);
     assert.match(completed.stdout, /openverse\s+✓ ready/);
+  } finally {
+    rmSync(temporary, { recursive: true, force: true });
+  }
+});
+
+test("doctor reports the agent judge as deferred, not as ready or misconfigured", () => {
+  const temporary = mkdtempSync(path.join(tmpdir(), "imgsrcy-doctor-agent-"));
+  const config = path.join(temporary, "config.json");
+  writeFileSync(config, JSON.stringify({
+    judge: { provider: "agent" },
+    pipeline: [{ provider: "wikimedia" }],
+  }));
+
+  try {
+    const completed = spawnSync(process.execPath, [cli, "doctor", "--config", config], {
+      cwd: temporary,
+      encoding: "utf8",
+    });
+    assert.equal(completed.status, 0, completed.stderr);
+    assert.match(completed.stdout, /Judge: agent\n\s+– deferred \(external agent\)/);
+    assert.doesNotMatch(completed.stdout, /unknown judge/);
   } finally {
     rmSync(temporary, { recursive: true, force: true });
   }
